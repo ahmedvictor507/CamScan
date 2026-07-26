@@ -1,0 +1,10 @@
+# Stretch-goal dependencies for the MobileSAM boundary method.
+# torch/torchvision are device-specific -- on a Jetson (JetPack 6.2 / CUDA 12.6) install with:
+#   pip install torch==2.8.0 torchvision==0.23.0 --index-url=https://pypi.jetson-ai-lab.io/jp6/cu126
+# On a normal x86 machine with a CUDA GPU (or CPU-only), just:
+#   pip install torch torchvision
+#
+# Then:
+#   pip install git+https://github.com/ChaoningZhang/MobileSAM.git
+#
+# Checkpoint (~40MB): https://github.com/ChaoningZhang/MobileSAM/blob/master/weights/mobile_sam.pt

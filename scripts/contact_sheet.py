@@ -37,7 +37,7 @@ def make_sheet(method, condition):
 
 
 if __name__ == "__main__":
-    methods = ["baseline", "aspect_ratio", "contrast_score"]
+    methods = ["baseline", "aspect_ratio", "contrast_score", "sam"]
     conditions = ["clean", "cluttered", "low_light", "skewed"]
     for method in methods:
         for condition in conditions:

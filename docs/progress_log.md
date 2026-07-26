@@ -181,3 +181,66 @@ Findings from the audit itself:
 Next: decide whether to pursue the SAM stretch goal (parked pending Jetson-specific
 PyTorch wheels) given the cluttered-bucket ceiling just found, or spend remaining time
 tightening the classical methods (e.g. a distinct-single-object prior) instead.
+
+## 2026-07-26 — Hr ~7: SAM stretch goal (MobileSAM, box prompt), and a fourth honestly
+audited data point
+
+**Setup.** This machine is a Jetson Orin Nano (JetPack 6.2 / L4T R36.4.7, CUDA 12.6).
+Installed PyTorch 2.8.0 / torchvision 0.23.0 from the Jetson AI Lab wheel index
+(`pypi.jetson-ai-lab.io/jp6/cu126` -- note `.io`, not the commonly-referenced `.dev`
+domain, which doesn't resolve). Had to downgrade `numpy<2` to match the wheel's ABI.
+
+**Used MobileSAM instead of full SAM**, disclosed up front rather than swapped
+silently: with normal desktop apps open, this machine had ~1GB RAM free (already 2.4GB
+into swap). Confirmed this wasn't a hypothetical concern -- full-size loading even
+MobileSAM's encoder onto the GPU hit a hard CUDA allocator OOM
+(`NVML.../CUDACachingAllocator` assert, `NvMapMemAllocInternalTagged error 12`). Fixed
+by forcing CPU inference (`sam_boundary.py`), which works but costs ~15s/image on this
+hardware -- documented as a real hardware constraint, not tuned away.
+
+**Two real bugs found and fixed while getting a correct result on `clean_01`:**
+1. With a box prompt covering most of the frame, MobileSAM's *highest-scoring* mask
+   was sometimes the background frame *around* the document (a concave "C"-shaped
+   region hugging 3 sides), not the document itself -- and it out-scored the correct
+   mask. A first fix attempt (mask pixel count / its own contour's enclosed area) didn't
+   catch this, because a "C" shape has no actual topological hole -- it's simply
+   connected, so that ratio comes out near 1.0 regardless. Fixed by comparing mask
+   pixel count against the area of the mask's own *minimum bounding rotated rectangle*
+   instead (`_rect_fill_ratio`): ~0.99 for a real document, ~0.5 for the C-shaped
+   frame. Candidates are filtered by this before ranking by SAM's own score.
+2. `mobile_sam` needed `timm` (undeclared transitive dependency for its TinyViT
+   backbone) -- not in its package metadata, only discovered at import time.
+
+**Full 38-photo, 4-method comparison, manually audited the same way as before**
+(every claimed success checked against its actual overlay in `docs/contact_sheets/`,
+not the automated proxy count):
+
+| method | clean | cluttered | low_light | skewed | **real total** |
+|---|---|---|---|---|---|
+| baseline | 11/14 | 5/8 | 2/9 | 3/7 | 21/38 |
+| aspect_ratio | 12/14 | 4/8 | 4/9 | 2/7 | 22/38 |
+| contrast_score | 11/14 | 5/8 | 2/9 | 0/7 | 18/38 |
+| sam | 12/14 | 3/8 | **5/9** | 3/7 | **23/38** |
+
+Findings:
+- SAM comes out narrowly ahead overall (23/38), and the win is concentrated exactly
+  where expected: `low_light` (5/9, vs. 2-4/9 for every classical method). SAM's
+  learned features recognize "document-shaped object" semantically and don't depend on
+  Canny gradients the way all three classical methods do, so weak lighting contrast
+  -- which cripples Canny -- doesn't cripple SAM the same way.
+- SAM is *worse* than baseline/aspect_ratio on `cluttered` (3/8 vs. 4-5/8). It doesn't
+  escape the "one document vs. a stack of documents" problem either -- `cluttered_08`
+  (notebook + underlying pages + a ruler) got the same whole-stack answer from SAM as
+  from the classical methods. It does fail more *honestly* in some cases though
+  (`cluttered_06` correctly triggered a fallback instead of confidently guessing wrong,
+  where baseline picked a bad quad) -- not reflected in the raw success count, same
+  caveat as the `clean_02` case from Improvement 1.
+- No method dominates outright. Each has a specific, explainable strength/weakness by
+  condition rather than a clean ranking -- classical contrast/shape scoring vs. learned
+  segmentation trade off differently depending on what's actually breaking (weak
+  lighting vs. ambiguous object boundaries). This is the real content of the
+  comparison, not a single "best method" verdict.
+
+Remaining known gap: none of the four methods reliably solves `cluttered` when the
+target document isn't visually dominant against other paper in frame -- that's a
+finding about the limits of both approaches at this scope, not an unfixed bug.

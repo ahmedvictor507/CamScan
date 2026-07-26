@@ -5,7 +5,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from camscan.pipeline import METHODS, detect_boundary
+from camscan.pipeline import ALL_METHODS, detect_boundary
 from camscan.preprocess import resize_for_detection
 
 DATA_DIR = Path("data/raw")
@@ -27,7 +27,7 @@ def run_comparison():
             original = cv2.imread(str(image_path))
             resized, _ = resize_for_detection(original)
 
-            for method in METHODS:
+            for method in ALL_METHODS:
                 quad, used_fallback = detect_boundary(resized, method=method)
                 area_ratio = quad_area_ratio(quad, resized.shape)
                 success = (not used_fallback) and (MIN_AREA_RATIO <= area_ratio <= MAX_AREA_RATIO)

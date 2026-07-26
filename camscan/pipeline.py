@@ -15,13 +15,23 @@ METHODS = {
     "aspect_ratio": aspect_ratio.find_document_contour,
     "contrast_score": contrast_score.find_document_contour,
 }
+ALL_METHODS = list(METHODS) + ["sam"]  # "sam" is resolved lazily -- see _resolve_method
+
+
+def _resolve_method(method):
+    if method == "sam":
+        # deferred: importing torch/mobile_sam costs real time and memory, not worth
+        # paying on every run of the (fast, lightweight) classical methods
+        from camscan.boundary import sam_boundary
+        return sam_boundary.find_document_contour
+    return METHODS[method]
 
 
 def detect_boundary(resized_image, method="baseline"):
     """Returns (quad, used_fallback) in the resized image's coordinate space."""
     gray = to_blurred_gray(resized_image)
     edge_map = detect_edges(gray)
-    quad = METHODS[method](edge_map, resized_image)
+    quad = _resolve_method(method)(edge_map, resized_image)
     if quad is None:
         return fallback_frame_contour(resized_image.shape), True
     return quad, False
@@ -49,7 +59,7 @@ def main():
     parser = argparse.ArgumentParser(description="Scan a document photo into a flat, enhanced image.")
     parser.add_argument("image", type=Path, help="Path to the input photo")
     parser.add_argument("-o", "--output", type=Path, default=None, help="Output path (default: <name>_scan.png next to input)")
-    parser.add_argument("--method", choices=METHODS.keys(), default="baseline")
+    parser.add_argument("--method", choices=ALL_METHODS, default="baseline")
     parser.add_argument("--debug-dir", type=Path, default=None, help="If set, save the contour overlay here")
     args = parser.parse_args()
 
