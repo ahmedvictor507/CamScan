@@ -28,7 +28,7 @@ def run_comparison():
             resized, _ = resize_for_detection(original)
 
             for method in ALL_METHODS:
-                quad, used_fallback = detect_boundary(resized, method=method)
+                quad, used_fallback = detect_boundary(resized, method=method, original_image=original)
                 area_ratio = quad_area_ratio(quad, resized.shape)
                 success = (not used_fallback) and (MIN_AREA_RATIO <= area_ratio <= MAX_AREA_RATIO)
 

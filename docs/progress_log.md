@@ -283,3 +283,229 @@ ground-truth-supervised calibration of that score, or a different prompting stra
 entirely (e.g. automatic whole-image mask generation instead of box prompts) -- ruled
 out earlier as too slow for CPU-only inference on this hardware. Treating 23/38 as the
 final, honestly-audited SAM result for this project's scope.
+
+## 2026-07-26 — Hr ~9: YOLO26-pose corner detector tested, hit a real dataset bug,
+pivoted to a YOLO+classical hybrid
+
+**Setup.** User had separately trained a YOLO26n-pose model (`model/best(3).pt`,
+1-class "corners", `kpt_shape=[4,3]`, 640x640, 288 epochs, reported 0.994 mAP50) outside
+this repo and wanted it tested as a fifth boundary-detection method, same as SAM. Added
+`ultralytics==8.4.106` (pip; not previously installed here), wrote
+`camscan/boundary/yolo_pose.py` following the same lazy-load/shared-signature pattern as
+`sam_boundary.py`, wired into `pipeline.py`/`compare.py`. Forced to CPU for the same
+reason as MobileSAM -- this Jetson OOMs the CUDA allocator under normal desktop load.
+Fed the model the original full-resolution photo (not the shared 500px detection frame)
+since it was trained at 640x640 and Ultralytics letterboxes/rescales internally anyway;
+its output quad is scaled back into the shared 500px coordinate space so it stays
+comparable to every other method's score.
+
+**Bug found: every prediction's 4 keypoints collapse into 2 distinct points**
+(keypoint 0 ~= keypoint 1, keypoint 2 ~= keypoint 3, separation ~0.1-0.5% of the box
+diagonal -- noise level), across every test photo in every condition, with no
+exceptions. This produced a systematic 0/38 automated score for `yolo_pose`: quads
+built from 2 real points (repeated) are degenerate/near-zero-area and always fail the
+area-ratio check.
+
+Investigated thoroughly before concluding anything, since the user (correctly) pushed
+back on an initial wrong read:
+- First guess (wrong, retracted after user pushback): misread `model/train_batch0.jpg`
+  at thumbnail resolution as having only 2 annotated keypoints per document. At full
+  zoom the training visualization does show what look like 4 distinct dot colors across
+  different cells.
+- Checked for an ultralytics version mismatch between training and here -- ruled out,
+  exact version match (8.4.106) confirmed via the checkpoint's own saved `version` field.
+- Read the actual `Pose26` head source (yolo26's new pose head, with a `RealNVP`
+  normalizing-flow submodule not present in the older `Pose` head) suspecting the flow
+  model was needed for correct decode and being skipped. Also ruled out: `RealNVP` here
+  implements RLE (Residual Log-likelihood Estimation), a training-time uncertainty loss
+  only (matches `rle: 1.5` in `model/args.yaml`), not an inference-time coordinate
+  transform -- a red herring.
+- Decisive test: ran the model directly on crops taken from `model/train_batch0.jpg`
+  itself -- images the model was trained on and should reproduce near-perfectly given
+  0.994 mAP50. Got the exact same collapse pattern. A real inference/decode bug would be
+  expected to disagree with training-time behavior; reproducing it exactly on training
+  data itself points at the label/export step instead.
+- Followed up with pixel-level zoom on the training visualization at the actual
+  documented corners (not thumbnail scale): the bottom-left corner shows one visible
+  dot, not two separated ones. Conclusion: the training data/export likely encodes only
+  2 distinct corner locations per document (duplicated across the 4 keypoint slots),
+  not 4 independent corners, despite `kpt_shape=[4,3]` -- most likely a labeling-tool or
+  Roboflow-export quirk from how the source dataset was built, not a bug in this repo's
+  code. Not independently confirmed against the original Roboflow project/label files
+  (those lived on Colab, `/content/Paper-Corner-Detection-2`, not saved locally) --
+  this is the most likely explanation given the evidence, not a certainty.
+
+**Pivot, at the user's suggestion: use YOLO for what its output actually supports.**
+The bounding box (built from the 2 real corners the model does predict reliably) is a
+normal, undamaged detection-head output, unaffected by the keypoint-collapse issue.
+Wrote `camscan/boundary/yolo_hybrid.py`: run YOLO on the full-res image for a coarse
+box, crop to it (+8% margin) in the shared 500px coordinate space, then run the same
+classical Canny + convex-hull + progressive-epsilon quad search the other methods use,
+but *inside* that crop -- where the document is the dominant shape in frame, instead of
+competing with a whole tabletop or messy pile. `min_area_ratio` for the inner search is
+0.35 (of the crop, not the frame) since a real document should fill most of a
+YOLO-localized crop.
+
+**Full 38-photo run, manually audited the same way as every other method** (automated
+proxy score is a fast smoke test only, not a real accuracy number -- established back in
+Hr ~5.5):
+
+| method | clean | cluttered | low_light | skewed | **real total** | (automated) |
+|---|---|---|---|---|---|---|
+| baseline | 11/14 | 5/8 | 2/9 | 3/7 | 21/38 | (36/38) |
+| aspect_ratio | 12/14 | 4/8 | 4/9 | 2/7 | 22/38 | (32/38) |
+| contrast_score | 11/14 | 5/8 | 2/9 | 0/7 | 18/38 | (26/38) |
+| sam | 12/14 | 3/8 | 5/9 | 3/7 | 23/38 | (27/38) |
+| yolo_pose | 0/14 | 0/8 | 0/9 | 0/7 | **0/38** | (0/38) |
+| yolo_hybrid | 12/14 | 4/8 | 2/9 | 4/7 | **22/38** | (27/38) |
+
+(baseline/aspect_ratio/contrast_score/sam rows are the previously audited numbers,
+unchanged, shown for reference.)
+
+Findings:
+- `yolo_pose` is not a usable data point in its current form -- 0/38 isn't "the model is
+  bad," it's "this comparison can't measure a model whose keypoint output is
+  structurally broken." Kept in the repo/comparison table for honesty (a silently
+  dropped method would be worse), but shouldn't be read as "learned pose regression
+  loses to everything else."
+- `yolo_hybrid` lands at 22/38, statistically tied with `aspect_ratio` (22/38) and
+  `sam` (23/38) -- not a clear winner or loser. Its automated score (27/38) overstated
+  it by 5, the same right-region-vs-wrong-region blind spot flagged repeatedly
+  throughout this project: several "successes" were quads that sliced diagonally across
+  only part of the true page (`clean_01`, `clean_06`, `low_light_03/05/09`,
+  `cluttered_08`) while still passing the non-fallback + 10-98%-area-ratio proxy check.
+- Where it actually helps: `skewed` (4/7, tied for best alongside baseline's historical
+  strength there) -- YOLO's coarse localization reliably finds the book/page even
+  against a bright sky background that confuses Canny, and once cropped tightly the
+  classical quad search handles the perspective skew fine.
+- Where it doesn't help: `low_light` (2/9) -- YOLO's box localization on these backlit
+  photos is often fine, but the classical search *inside* the crop still needs a real
+  Canny edge to find the document's own boundary, and weak backlit contrast defeats it
+  the same way it defeats every from-scratch classical method. Cropping first doesn't
+  fix a fundamentally weak edge signal.
+- `cluttered` (4/8) is roughly the same story as every other method on this bucket:
+  when YOLO's box already spans nearly the whole frame (an open book with two facing
+  pages, or a document buried in a stack), cropping to it doesn't isolate a single
+  dominant document shape, so the inner classical search is back to the same
+  "which one is the real document" ambiguity that's limited every method so far.
+
+**Overall verdict for this stretch goal:** the raw pose-regression approach didn't
+produce a usable result on this dataset/model, most likely due to a labeling/export
+issue upstream rather than a modeling failure -- flagged rather than silently
+worked around. The YOLO+classical hybrid built on top of it is a legitimate fifth
+data point, competitive with (not clearly better than) the existing methods, with the
+same structural blind spot on ambiguous multi-document clutter that every method in
+this project has run into. No single method dominates; the real content of this project
+continues to be *which specific condition each method's specific mechanism helps or
+hurts*, not a single leaderboard-style "best method."
+
+## 2026-07-27 -- A second training run (YOLOv8n-pose) actually works: direct 4-keypoint detection, no hybrid needed
+
+The user pointed at a second local training attempt in `model/attempt 2_yolov8/` --
+same task (4-corner document pose, single class), same dataset lineage
+(`Paper-Corner-Detection-2`), but `yolov8n-pose.pt` as the base model instead of
+YOLO26n-pose, 50 epochs, `rle: 1.0` (vs the YOLO26 run's `rle: 1.5`). Final-epoch
+metrics from `results.csv`: box mAP50-95 ~0.907, pose mAP50-95 ~0.474, pose mAP50
+~0.973 -- a real, converged run, not a partial one.
+
+**First check: does this run have the same keypoint-collapse bug as the YOLO26
+attempt?** Spot-checked predictions directly (`model.predict(..., conf=0.25)`) on
+three raw photos before writing any pipeline code:
+- `clean_01`: 4 keypoints at `(951,184)`, `(328,158)`, `(262,683)`, `(936,646)` --
+  four genuinely distinct corners spanning the whole detected box.
+- `clean_02`, `cluttered_01`: same pattern, four distinct corners forming a real quad
+  each time.
+
+Confirms the user's claim directly: this checkpoint does not have the 2-point
+collapse that made `yolo_pose.py` (the YOLO26 attempt) score 0/38. One caveat found
+during this check: per-keypoint confidence on this model is noisy -- one otherwise
+geometrically correct corner came back with confidence ~0.005. Gating on a per-point
+confidence floor (the same `min_kpt_conf=0.5` pattern used in `yolo_pose.py`) would
+have thrown away good detections, so `yolo_v8_pose.py` only filters on overall box
+confidence and trusts all 4 returned points once a detection passes that bar.
+
+**Environment note (unrelated to the model, but blocked the run):** system `numpy`
+had drifted to 2.2.6 at some point after the last session, which broke `torch` import
+entirely (this Jetson's nv24.08 torch wheel is compiled against numpy 1.x) -- not
+just for this new model, for every learned method. Fixed with `pip install
+"numpy<2"` (landed on 1.26.4). Also found `imutils` and `mobile_sam` missing from the
+user-site packages (present in a previous session, absent now -- most likely a
+system-level package cleanup between sessions, not caused by anything in this repo).
+Reinstalled `imutils` since `camscan/preprocess.py` depends on it directly.
+`mobile_sam` was left alone (out of scope for this task) and `sam` was excluded from
+this run; **`yolo_pose.py`'s hardcoded checkpoint path
+(`model/best(3).pt`) is now stale** since the model folders were reorganized into
+`attempt 1_yolo26/` and `attempt 2_yolov8/` -- `yolo_pose` and `yolo_hybrid` were
+excluded from this comparison run for that reason and still need that path fixed
+before they can run again.
+
+**Built `camscan/boundary/yolo_v8_pose.py`:** same interface and full-res-input
+convention as `yolo_pose.py` (checkpoint at
+`model/attempt 2_yolov8/weights/best.pt`, predicts at 640x640 on the original image,
+scales the resulting quad back into the shared 500px detection space), but simpler --
+no per-keypoint confidence gate (see above), and since the 4 points are directly
+usable this is a straight `_order_corners` + area-sanity-check, no classical
+refinement layer needed.
+
+**Automated comparison (baseline / aspect_ratio / contrast_score / yolo_v8_pose only,
+`sam`/`yolo_pose`/`yolo_hybrid` excluded per the environment notes above):**
+
+```
+method            clean  cluttered  low_light  skewed  overall
+baseline          14/14     8/8        9/9      6/7     36/38
+aspect_ratio      13/14     7/8        7/9      5/7     32/38
+contrast_score    12/14     8/8        4/9      2/7     26/38
+yolo_v8_pose      14/14     7/8        6/9      5/7     32/38
+```
+
+**Manually audited** against the debug overlays (per this project's standing rule
+that the automated proxy can't distinguish "a quad" from "the right quad"):
+
+| condition | automated | audited |
+|---|---|---|
+| clean | 14/14 | 14/14 |
+| cluttered | 7/8 | 4/8 |
+| low_light | 6/9 | 5/9 |
+| skewed | 5/7 | 5/7 |
+| **total** | **32/38** | **28/38** |
+
+- `clean`: all 14 genuinely correct, including skewed book-cover shots (`clean_01`,
+  `clean_02`, `clean_05`, `clean_06`) and curled/creased pages (`clean_13`,
+  `clean_14`) -- the model handles real perspective distortion on the corners
+  correctly, which is exactly the property the user said the dataset was labeled for.
+- `cluttered`: the automated score (7/8) overstated it -- 3 of the 7 "successes"
+  were quads that clearly overshot the true page boundary onto background clutter
+  once viewed at full resolution (`cluttered_01`: top edge cuts across a background
+  page; `cluttered_04`: overshoots onto a background sheet past the true bottom-left
+  corner; `cluttered_08`: overshoots right onto the ruler/background past the
+  notebook's real edge). Real correct count: `cluttered_03`, `05`, `06`, `07` -- 4/8.
+  `cluttered_02` is a genuine fallback (no detection).
+- `low_light`: audited close to the automated score. Real correct: `low_light_03`,
+  `04`, `07`, `08`, `09` -- all five hold a tight, accurate quad on the page despite
+  harsh backlighting from a window. `01`, `02`, `05`, `06` are genuine fallbacks (no
+  detection at all) -- backlit silhouette photos where the model doesn't fire a
+  confident box, not a wrong-quad problem.
+- `skewed`: all 5 non-fallback detections audited as correct, including two
+  photos where the page is held up against a bright, textured sky/skyline
+  background that has defeated Canny-based methods throughout this project
+  (`skewed_04`, `skewed_06`) and one where two book pages/covers touch and the model
+  still separates the correct one (`skewed_02`, `skewed_06`). `skewed_01` and
+  `skewed_03` are fallbacks.
+
+**Verdict:** this is the best audited score of any method tested in this project so
+far (28/38, vs the previous best of `sam` at 23/38 and `baseline` at 21/38), and the
+first learned method that actually works as originally intended -- direct 4-corner
+regression, no classical fallback layer required. Its failure mode is narrower and
+more honest than the classical methods': when it's wrong, it's usually a clean
+fallback (no detection) rather than a confidently-wrong quad, except on `cluttered`
+where 3 of 8 detections are confidently wrong in the same "found a real quad, wrong
+region" way every other method struggles with. `low_light` fallbacks and `cluttered`
+overshoot remain the two weakest spots; unlike `yolo_hybrid`, there's no classical
+refinement step to add here since the model's own corners are already the intended
+final answer.
+
+**Still open, not requested by the user:** `yolo_pose.py`'s checkpoint path is stale
+after the `model/` reorg and needs updating to
+`model/attempt 1_yolo26/best(3).pt` before that method (or `yolo_hybrid`, which
+depends on it) can run again. `mobile_sam` is missing from the environment and `sam`
+could not be run this session.
