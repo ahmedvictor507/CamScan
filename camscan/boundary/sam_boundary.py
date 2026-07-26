@@ -67,7 +67,17 @@ def find_document_contour(edge_map, image, box_margin=0.05, min_area_ratio=0.05,
     Doesn't just take SAM's top-scoring mask: with a box that covers most of the image,
     SAM sometimes segments the background frame around the document and scores it
     higher than the document itself. Filtering by rect_fill first, then ranking by
-    SAM's own score among what's left, avoids that."""
+    SAM's own score among what's left, avoids that.
+
+    Tried augmenting this with a second, tighter box prompt seeded from the classical
+    candidate generator's rough localization, pooling both boxes' candidates and
+    picking the overall highest score. Reverted: SAM's confidence score isn't
+    comparable across different box prompts -- a looser, less accurate candidate from
+    the second box sometimes scored higher than the correct one from this box, so
+    pooling introduced new confident-wrong-answers (previously honest fallbacks on
+    cluttered_06 and low_light_06 became wrong-but-claimed-successful) for one modest,
+    still-imperfect partial fix (skewed_02). Net effect was negative on a full audit;
+    single box prompt is the better-understood, honestly-audited version."""
     predictor = _get_predictor()
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     predictor.set_image(image_rgb)

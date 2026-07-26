@@ -244,3 +244,42 @@ Findings:
 Remaining known gap: none of the four methods reliably solves `cluttered` when the
 target document isn't visually dominant against other paper in frame -- that's a
 finding about the limits of both approaches at this scope, not an unfixed bug.
+
+## 2026-07-26 — Hr ~8: Tried to improve SAM further, reverted after a full audit
+
+User asked whether SAM could be made more robust/accurate. Diagnosed the three known
+failures (`skewed_01`, `low_light_01`, `cluttered_08`) as a box-prompt problem: the
+generic box covers ~90% of the frame regardless of where the document actually is, and
+when the document isn't centered or isn't the most visually dominant thing in that huge
+box, SAM's decoder guesses wrong.
+
+**Tried:** a second, tighter box prompt seeded from the classical candidate generator's
+rough localization (`_seed_box`), pooling both boxes' candidate masks and picking the
+overall highest-scoring one across both. Cheap to add -- SAM's image encoding is the
+expensive part and only runs once per image; a second box only costs another decoder
+pass (~+1-7s, confirmed by timing).
+
+**Result: net negative, reverted.** Spot-tested against the 4 known failures first:
+fixed one (`skewed_02`, previously only grabbing half the page, though still imperfect
+after the fix) and didn't move the other three. But a full audit of the resulting
+38-photo run found real regressions the targeted spot-test missed: `clean_01`/`clean_02`
+now failed outright (full fallback, previously correct), and `cluttered_06`/
+`low_light_06` flipped from honest fallbacks into confidently wrong answers. Root cause:
+SAM's own confidence score isn't comparable *across different box prompts* -- for
+`clean_01`, the seed box ended up nearly as large as the generic box (padding an
+already-large classical candidate by 20% covers almost the whole frame anyway), and
+produced a looser, less accurate mask that scored *higher* (0.971) than the correct
+mask from the original box (0.877). Picking the global max-by-score across both boxes
+therefore sometimes picked the worse answer. Reverted to the single-box version;
+confirmed the revert reproduces the original run's automated numbers exactly
+(clean 12/14, cluttered 4/8, low_light 6/9, skewed 5/7, 27/38 raw), so the previously
+audited 23/38 real total still stands unchanged.
+
+Takeaway for anyone trying to push this further: SAM's reported mask score is not a
+reliable arbiter for comparing across prompts/scales, any more than the classical
+contrast score was reliable across candidate sizes (same shape of problem as the
+contrast_score area-weighting issue in Improvement 2). A real fix would need either
+ground-truth-supervised calibration of that score, or a different prompting strategy
+entirely (e.g. automatic whole-image mask generation instead of box prompts) -- ruled
+out earlier as too slow for CPU-only inference on this hardware. Treating 23/38 as the
+final, honestly-audited SAM result for this project's scope.
