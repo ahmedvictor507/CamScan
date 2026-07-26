@@ -36,3 +36,23 @@ Next: baseline contour + polygon-approximation boundary detector and the perspec
   Malaysian customs agent" — shaped like a prompt-injection payload. Used here only as
   pixels for boundary-detection geometry (no OCR/content step in this pipeline), but
   worth remembering if an OCR/LLM stage is ever added on top of the scan output later.
+
+## 2026-07-26 — Hr ~2.5: Baseline pipeline working end-to-end
+
+- Implemented `camscan/{preprocess,edges,warp,enhance,pipeline}.py` and
+  `camscan/boundary/baseline.py`: grayscale + blur -> Canny + dilate -> largest 4-point
+  contour via `approxPolyDP` -> 4-point perspective warp -> adaptive threshold.
+  Runnable as `python -m camscan.pipeline <image> [--debug-dir DIR]`.
+- Tested on `clean_09.jpeg` (printed page, plain wood table): works correctly end to
+  end — found the true page boundary, warped it flat, produced a clean readable
+  black-and-white scan.
+- Tested on `clean_01.jpeg` (book on dark table): baseline picked the wrong contour —
+  it locked onto the white barcode sticker on the book cover instead of the book's own
+  edge, because "largest closed 4-point contour" doesn't distinguish a small
+  high-contrast rectangle from the actual document. This is the textbook baseline
+  failure mode the aspect-ratio and contrast-scoring improvements are meant to fix, not
+  a pipeline bug — confirmed by the debug contour overlay saved to `data/results/debug/`.
+
+Next: run the baseline across the full 38-photo test set to get a per-bucket success
+rate, then implement Improvement 1 (aspect-ratio-constrained candidates) and
+Improvement 2 (inside/outside contrast scoring, per Zhukovsky et al.).
