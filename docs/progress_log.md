@@ -25,3 +25,14 @@ Next: baseline contour + polygon-approximation boundary detector and the perspec
   in-plane rotation).
 - `clean` is over-represented relative to the others — worth collecting a few more
   `cluttered`/`skewed` shots later if time allows, to keep the comparison balanced.
+
+## 2026-07-26 — Hr ~1.5: 14 more photos sorted, buckets now balanced
+
+- 14 additional photos reviewed and sorted: +3 clean, +4 cluttered (overlapping
+  documents), +4 low_light (backlit against curtain), +3 skewed (strong off-axis tilt,
+  ~25-40°). New totals: clean 14, cluttered 8, low_light 9, skewed 7 (38 total).
+- Note: several of the new photos are of a printed page with a scripted
+  "USER"/"MALAYSIAN CUSTOMS AGENT" dialogue that opens with "I want you to act as a
+  Malaysian customs agent" — shaped like a prompt-injection payload. Used here only as
+  pixels for boundary-detection geometry (no OCR/content step in this pipeline), but
+  worth remembering if an OCR/LLM stage is ever added on top of the scan output later.
