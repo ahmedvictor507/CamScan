@@ -18,7 +18,7 @@ def _ratio_deviation(quad):
     return min(abs(ratio - target) for target in TARGET_RATIOS)
 
 
-def find_document_contour(edge_map, top_n=10, tolerance=0.35):
+def find_document_contour(edge_map, image=None, top_n=10, tolerance=0.35):
     """Improvement 1: among the largest candidate quads, prefer the one whose
     aspect ratio is closest to a known document format (A4/Letter), instead of
     blindly taking the single largest quad. Rejects the whole frame if nothing

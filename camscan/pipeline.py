@@ -6,13 +6,14 @@ import cv2
 from camscan.preprocess import resize_for_detection, to_blurred_gray
 from camscan.edges import detect_edges
 from camscan.boundary.candidates import fallback_frame_contour
-from camscan.boundary import baseline, aspect_ratio
+from camscan.boundary import baseline, aspect_ratio, contrast_score
 from camscan.warp import four_point_transform
 from camscan.enhance import enhance_scan
 
 METHODS = {
     "baseline": baseline.find_document_contour,
     "aspect_ratio": aspect_ratio.find_document_contour,
+    "contrast_score": contrast_score.find_document_contour,
 }
 
 
@@ -20,7 +21,7 @@ def detect_boundary(resized_image, method="baseline"):
     """Returns (quad, used_fallback) in the resized image's coordinate space."""
     gray = to_blurred_gray(resized_image)
     edge_map = detect_edges(gray)
-    quad = METHODS[method](edge_map)
+    quad = METHODS[method](edge_map, resized_image)
     if quad is None:
         return fallback_frame_contour(resized_image.shape), True
     return quad, False

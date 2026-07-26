@@ -100,3 +100,84 @@ Improvement 2 (inside/outside contrast scoring, per Zhukovsky et al.).
 
 Next: implement Improvement 2 (contrast scoring, per Zhukovsky et al. 2020), add it to
 compare.py, re-run the full comparison.
+
+## 2026-07-26 — Hr ~5.5: Improvement 2, a real candidate-generation bug fix, and a full
+manual audit that overturns the automated numbers
+
+**Improvement 2.** Implemented `contrast_score.py`: scores each candidate quad by the
+color difference between a thin band just inside its border and a thin band just
+outside (per Zhukovsky et al., 2020), instead of trusting area or aspect ratio alone.
+
+**The user pointed at `clean_02_contour.png` and said the Dune book was never captured
+correctly.** Investigating that directly uncovered a real, foundational bug, not just a
+scoring problem:
+
+- The raw Canny edge map barely showed the book's outline at all against the dark
+  table -- fixed thresholds (75/200) are tuned for high-contrast scenes and miss a dark
+  object on a dark background entirely. Fixed by adding CLAHE local-contrast
+  enhancement before blur (`preprocess.py`) and switching Canny to per-image adaptive
+  thresholds based on the image's own median intensity (`edges.py`), instead of one
+  global threshold.
+- Even after that, the book's true contour was being traced but approximated to 11
+  noisy, non-convex points -- never reducible to a clean quad. Fixed by taking the
+  convex hull of each contour before `approxPolyDP` (`candidates.py`), which strips
+  that noise out.
+- A related case (`clean_02`, front cover) still failed: the hull-cleaned contour
+  approximated to 5 points, one over the cutoff, and got silently discarded. Fixed with
+  a progressive-epsilon search (0.02 up to 0.10) that keeps relaxing until it collapses
+  to exactly 4 points, instead of only trying one fixed epsilon.
+- `contrast_score` needed one more fix on top of all that: even with the real book
+  candidate available and much larger, its raw contrast (~20-30, a dark book against a
+  dark table) still lost to a small, sharply-contrasted sticker or text block (~130-200)
+  in the same frame. Weighting the score by candidate area (linear) fixed the clean
+  cases. Pushed the area exponent to 1.5 to try to also fix some low_light/skewed
+  cases -- it fixed those but broke others that linear weighting had gotten right
+  (25/38 vs 26/38 automated). Reverted to linear. This is now documented as a real,
+  accepted limitation of scoring by raw region-mean contrast under uneven lighting, not
+  an unsolved tuning problem -- pure contrast alone isn't a reliable signal when the
+  true boundary's contrast is inherently weak and inconsistent.
+
+**Then a second, more serious problem showed up:** after those candidate-generation
+fixes, `compare.py`'s automated numbers jumped enormously (baseline 11/38 -> 36/38) --
+too good to be true for a 2-day classical CV pipeline. Spot-checking baseline's
+`cluttered` and `low_light` "successes" against their debug overlays confirmed it:
+several were boxes that traced the *entire* stack of overlapping documents instead of
+one document, or wildly overshot the actual page into the background curtain, while
+still passing the automated proxy check (found a non-fallback quad, 10-98% of frame
+area). The proxy metric literally cannot tell "found a quad" from "found the *right*
+quad" -- this is the same blind spot flagged after `clean_02` earlier, just at much
+larger scale than one image.
+
+**Response: full manual visual audit**, not another automated metric. Built
+`scripts/contact_sheet.py` to tile each method/condition's debug overlays into one
+grid image (saved to `docs/contact_sheets/`), then visually verified every image each
+method claimed as a success against its actual overlay.
+
+| method | clean | cluttered | low_light | skewed | **real total** | (automated total) |
+|---|---|---|---|---|---|---|
+| baseline | 11/14 | 5/8 | 2/9 | 3/7 | **21/38** | (36/38) |
+| aspect_ratio | 12/14 | 4/8 | 4/9 | 2/7 | **22/38** | (32/38) |
+| contrast_score | 11/14 | 5/8 | 2/9 | 0/7 | **18/38** | (26/38) |
+
+Findings from the audit itself:
+- The three methods are much closer together than the automated score suggested.
+  `aspect_ratio` narrowly leads overall, which matches the intended progression
+  (baseline -> constrained -> re-scored), though the margin is modest, not dramatic.
+- `contrast_score` is genuinely weak on `skewed` (0/7 in manual review) -- raw
+  region-mean contrast gets overwhelmed by the sky-brightness gradient across those
+  handheld-against-a-window photos, which creates a stronger "edge" signal than the
+  document's own boundary.
+- All three methods score almost identically on `cluttered` (5/8, 4/8, 5/8) because
+  they all re-rank the *same* candidate list -- none of them can tell "this is one
+  document" from "this is a stack of documents," so when the true single-document
+  candidate isn't clearly dominant, all three converge on the same wrong answer. That's
+  a structural gap in this whole candidate-generation-then-rerank approach, not
+  something any of the three scoring functions individually can fix -- worth keeping in
+  mind for the writeup as the actual boundary of what classical re-ranking can achieve.
+- The automated `compare.py` proxy metric is kept in the repo (still useful as a fast
+  smoke test / regression check) but is now documented as unreliable for reporting
+  real accuracy -- the manual audit numbers above are the ones that should be quoted.
+
+Next: decide whether to pursue the SAM stretch goal (parked pending Jetson-specific
+PyTorch wheels) given the cluttered-bucket ceiling just found, or spend remaining time
+tightening the classical methods (e.g. a distinct-single-object prior) instead.

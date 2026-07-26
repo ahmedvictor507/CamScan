@@ -1,7 +1,7 @@
 from camscan.boundary.candidates import quad_candidates
 
 
-def find_document_contour(edge_map, top_n=5):
+def find_document_contour(edge_map, image=None, top_n=5):
     """Baseline: just take the largest candidate quad. No content check at all --
     a small high-contrast rectangle (a sticker, a label) beats the actual document
     whenever it happens to be a cleaner quad."""

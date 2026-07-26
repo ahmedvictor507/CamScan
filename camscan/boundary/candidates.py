@@ -15,12 +15,30 @@ def quad_candidates(edge_map, top_n=10, min_area_ratio=0.02):
 
     quads = []
     for contour in contours:
-        perimeter = cv2.arcLength(contour, True)
-        approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
-        if len(approx) == 4 and cv2.isContourConvex(approx):
-            if cv2.contourArea(approx) >= min_area_ratio * frame_area:
-                quads.append(approx.reshape(4, 2))
+        # the true boundary is often traced as a noisy, slightly non-convex polygon
+        # (broken edge segments, texture inside the document) that approxPolyDP can't
+        # collapse to 4 points directly -- taking the convex hull first strips that
+        # noise out, since a document's outline is convex by construction
+        hull = cv2.convexHull(contour)
+        approx = _approx_to_quad(hull)
+        if approx is not None and cv2.contourArea(approx) >= min_area_ratio * frame_area:
+            quads.append(approx.reshape(4, 2))
     return quads
+
+
+def _approx_to_quad(hull, start=0.02, stop=0.10, step=0.01):
+    """approxPolyDP at a fixed epsilon often leaves a document's outline at 5-6 points
+    (one corner slightly rounded or doubled) even after the convex hull cleanup --
+    stepping the epsilon up until it collapses to exactly 4 recovers those near-quads
+    instead of discarding them."""
+    perimeter = cv2.arcLength(hull, True)
+    epsilon = start
+    while epsilon <= stop:
+        approx = cv2.approxPolyDP(hull, epsilon * perimeter, True)
+        if len(approx) == 4:
+            return approx if cv2.isContourConvex(approx) else None
+        epsilon += step
+    return None
 
 
 def fallback_frame_contour(image_shape):
