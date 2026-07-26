@@ -75,10 +75,10 @@ Improvement 2 (inside/outside contrast scoring, per Zhukovsky et al.).
   points) -- added a `min_area_ratio` floor at the source.
 - Results after the fix:
 
-  | method | clean | cluttered | low_light | skewed | overall |
-  |---|---|---|---|---|---|
-  | baseline | 9/14 | 0/8 | 1/9 | 1/7 | 11/38 |
-  | aspect_ratio | 8/14 | 0/8 | 1/9 | 1/7 | 10/38 |
+  | method | clean | cluttered | low_light | skewed | overall (raw) | overall (corrected) |
+  |---|---|---|---|---|---|---|
+  | baseline | 9/14 | 0/8 | 1/9 | 1/7 | 11/38 | 10/38 |
+  | aspect_ratio | 8/14 | 0/8 | 1/9 | 1/7 | 10/38 | 10/38 |
 
 - Important caveat, found by visually auditing the debug overlays rather than trusting
   the score: aspect_ratio's one "loss" vs baseline (`clean_02`) is actually a case where
@@ -87,7 +87,12 @@ Improvement 2 (inside/outside contrast scoring, per Zhukovsky et al.).
   a quad" from "found the *right* quad" without ground-truth corners. aspect_ratio
   correctly rejected that same bad candidate (it isn't A4/Letter-shaped) and fell back
   instead of confidently returning a wrong crop, which the metric doesn't reward. So the
-  raw score modestly *understates* aspect_ratio's real value.
+  raw score modestly *understates* aspect_ratio's real value. Manually correcting this
+  one known false positive (verified by eye against `data/results/debug/baseline/clean/
+  clean_02_contour.png`) puts baseline and aspect_ratio at a tied 10/38 -- not baseline
+  ahead. Only this single case has been manually re-verified; the rest of the raw counts
+  still carry the same right-region-vs-wrong-region blind spot and haven't been audited
+  one by one.
 - `cluttered` (0/8) and `low_light` (1/9) are essentially unsolved by both classical
   shape-only methods -- expected, and exactly what Improvement 2 (inside/outside
   contrast scoring) targets next, since it scores by boundary contrast rather than
