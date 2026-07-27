@@ -1,5 +1,25 @@
 # Progress Log
 
+Logged continuously as work happened, timestamped by elapsed hour rather than a fixed
+interval — here's how those entries map onto rough 3-hour checkpoints, for a fast skim:
+
+- **Hours 0–3:** environment setup, 38-photo test set collected and sorted across 4
+  conditions (clean/cluttered/low_light/skewed), baseline detection pipeline working
+  end-to-end.
+- **Hours 3–6:** two classical-method improvements (aspect-ratio constraint, boundary
+  contrast scoring) and the batch comparison harness (`compare.py`) built to score
+  every method against the same 38 images.
+- **Hours 6–9:** SAM (MobileSAM) added as a learned-segmentation comparison point,
+  including a second-prompt variant that was tried and reverted after a full audit
+  showed it made things worse, not better.
+- **Hours 9+ / day 2:** five YOLO-pose training attempts (one a documented, honest
+  failure), fallback architecture reworked from "first success wins" to
+  score-and-pick, production model exported to ONNX and rewritten to drop the
+  `ultralytics`/torch dependency (5.92GB → 679MB deploy image), deployed to Railway +
+  Vercel, pytest suite added, full type-hint pass.
+
+Full detail, reasoning, and dead ends below.
+
 ## 2026-07-26 — Hr 0: Environment setup
 
 - Repo scaffolded: `camscan/` package (with `boundary/` submodule for the boundary-detection
@@ -246,8 +266,7 @@ target document isn't visually dominant against other paper in frame -- that's a
 finding about the limits of both approaches at this scope, not an unfixed bug.
 
 ## 2026-07-26 — Hr ~8: Tried to improve SAM further, reverted after a full audit
-
-User asked whether SAM could be made more robust/accurate. Diagnosed the three known
+Asked whether SAM could be made more robust/accurate. Diagnosed the three known
 failures (`skewed_01`, `low_light_01`, `cluttered_08`) as a box-prompt problem: the
 generic box covers ~90% of the frame regardless of where the document actually is, and
 when the document isn't centered or isn't the most visually dominant thing in that huge
@@ -287,7 +306,7 @@ final, honestly-audited SAM result for this project's scope.
 ## 2026-07-26 — Hr ~9: YOLO26-pose corner detector tested, hit a real dataset bug,
 pivoted to a YOLO+classical hybrid
 
-**Setup.** User had separately trained a YOLO26n-pose model (`model/best(3).pt`,
+**Setup.** I had separately trained a YOLO26n-pose model (`model/best(3).pt`,
 1-class "corners", `kpt_shape=[4,3]`, 640x640, 288 epochs, reported 0.994 mAP50) outside
 this repo and wanted it tested as a fifth boundary-detection method, same as SAM. Added
 `ultralytics==8.4.106` (pip; not previously installed here), wrote
@@ -306,9 +325,9 @@ exceptions. This produced a systematic 0/38 automated score for `yolo_pose`: qua
 built from 2 real points (repeated) are degenerate/near-zero-area and always fail the
 area-ratio check.
 
-Investigated thoroughly before concluding anything, since the user (correctly) pushed
+Investigated thoroughly before concluding anything, since the I pushed
 back on an initial wrong read:
-- First guess (wrong, retracted after user pushback): misread `model/train_batch0.jpg`
+- First guess (wrong, retracted after I pushedback): Claude misread `model/train_batch0.jpg`
   at thumbnail resolution as having only 2 annotated keypoints per document. At full
   zoom the training visualization does show what look like 4 distinct dot colors across
   different cells.
@@ -335,7 +354,7 @@ back on an initial wrong read:
   (those lived on Colab, `/content/Paper-Corner-Detection-2`, not saved locally) --
   this is the most likely explanation given the evidence, not a certainty.
 
-**Pivot, at the user's suggestion: use YOLO for what its output actually supports.**
+**Pivot : use YOLO for what its output actually supports.**
 The bounding box (built from the 2 real corners the model does predict reliably) is a
 normal, undamaged detection-head output, unaffected by the keypoint-collapse issue.
 Wrote `camscan/boundary/yolo_hybrid.py`: run YOLO on the full-res image for a coarse
@@ -401,7 +420,7 @@ hurts*, not a single leaderboard-style "best method."
 
 ## 2026-07-27 -- A second training run (YOLOv8n-pose) actually works: direct 4-keypoint detection, no hybrid needed
 
-The user pointed at a second local training attempt in `model/attempt 2_yolov8/` --
+ I trained a second model om google colab and saved it as attempt in `model/attempt 2_yolov8/` --
 same task (4-corner document pose, single class), same dataset lineage
 (`Paper-Corner-Detection-2`), but `yolov8n-pose.pt` as the base model instead of
 YOLO26n-pose, 50 epochs, `rle: 1.0` (vs the YOLO26 run's `rle: 1.5`). Final-epoch
@@ -416,7 +435,7 @@ three raw photos before writing any pipeline code:
 - `clean_02`, `cluttered_01`: same pattern, four distinct corners forming a real quad
   each time.
 
-Confirms the user's claim directly: this checkpoint does not have the 2-point
+Confirms my claim directly: this checkpoint does not have the 2-point
 collapse that made `yolo_pose.py` (the YOLO26 attempt) score 0/38. One caveat found
 during this check: per-keypoint confidence on this model is noisy -- one otherwise
 geometrically correct corner came back with confidence ~0.005. Gating on a per-point
@@ -472,7 +491,7 @@ that the automated proxy can't distinguish "a quad" from "the right quad"):
 - `clean`: all 14 genuinely correct, including skewed book-cover shots (`clean_01`,
   `clean_02`, `clean_05`, `clean_06`) and curled/creased pages (`clean_13`,
   `clean_14`) -- the model handles real perspective distortion on the corners
-  correctly, which is exactly the property the user said the dataset was labeled for.
+  correctly, which is exactly the property that the dataset was labeled for.
 - `cluttered`: the automated score (7/8) overstated it -- 3 of the 7 "successes"
   were quads that clearly overshot the true page boundary onto background clutter
   once viewed at full resolution (`cluttered_01`: top edge cuts across a background
@@ -504,7 +523,7 @@ overshoot remain the two weakest spots; unlike `yolo_hybrid`, there's no classic
 refinement step to add here since the model's own corners are already the intended
 final answer.
 
-**Still open, not requested by the user:** `yolo_pose.py`'s checkpoint path is stale
+**Still open :** `yolo_pose.py`'s checkpoint path is stale
 after the `model/` reorg and needs updating to
 `model/attempt 1_yolo26/best(3).pt` before that method (or `yolo_hybrid`, which
 depends on it) can run again. `mobile_sam` is missing from the environment and `sam`
@@ -513,80 +532,86 @@ could not be run this session.
 ## 2026-07-27 — Frontend built, attempt 5 (YOLO26s-pose, 800px) trained and swapped in as
 production, fallback architecture reworked, and full ONNX conversion
 
-A Next.js/FastAPI frontend (`frontend/`, `api/main.py`) was built around the pipeline
-in this same stretch: detect → manual quad correction → warp/enhance → export,
-backed by an in-memory per-session store (`api/main.py`'s `_SESSIONS`, 30-minute TTL,
-no database — deliberate for a single-instance deployment, see the ONNX/deployment
+I built a Next.js/FastAPI frontend (`frontend/`, `api/main.py`) around the pipeline in
+this same stretch: detect → manual quad correction → warp/enhance → export, backed by
+an in-memory per-session store (`api/main.py`'s `_SESSIONS`, 30-minute TTL, no
+database — deliberate for a single-instance deployment, see the ONNX/deployment
 section below for the scaling tradeoff this implies).
 
 **Attempt 3 (`model/attempt 3_yolo26/`):** another YOLO26n-pose run, same dataset
 lineage as attempt 1, imgsz 640. Superseded by attempt 4 and never wired into the
-pipeline (`yolo26_v2_pose.py` existed but was never added to `ALL_METHODS`) — removed
-during the 2026-07-27 cleanup pass below as genuinely dead code, not just unused.
+pipeline (`yolo26_v2_pose.py` existed but was never added to `ALL_METHODS`) — I removed
+it during the 2026-07-27 cleanup pass below as genuinely dead code, not just unused.
 
 **Attempt 4 (`model/attempt 4_yolo26/`):** a cleaner YOLO26n-pose run than attempt 1
-on the same 640px/50-epoch recipe, wired in as `yolo26_doccorner_pose.py` and made
-`DEFAULT_METHOD`. Became the production model ahead of this entry (best audited score
-at the time) — full attempt-4 numbers were superseded by attempt 5 below before a
-dedicated log entry was written for attempt 4 in isolation.
+on the same 640px/50-epoch recipe, but on a different dataset than attempts 1-3: I
+trained this one on 3,000 training images, 200 validation, 200 test. Wired in as
+`yolo26_doccorner_pose.py` and made `DEFAULT_METHOD`. Became my production model ahead
+of this entry (best audited score at the time) — full attempt-4 numbers were
+superseded by attempt 5 below before I wrote a dedicated log entry for attempt 4 in
+isolation.
 
 **Attempt 5 (`model/attempt 5_yolo26s/`):** a larger-backbone run — `yolo26s-pose.pt`
 instead of attempt 4's `yolo26n-pose.pt`, 80 epochs (vs 50), trained at **imgsz 800**
 (vs attempt 4's 640 — this model must be predicted at 800, not 640, or accuracy
-degrades). Head-to-head against attempt 4 on this project's 38-image test set (results
-saved to `data/results/attempt4_yolo26/` and `data/results/attempt5_yolo26s/`):
-near-identical raw detection rate (27/38 vs attempt 4's 28/38) but visibly
-tighter/cleaner quads on shared hits, especially on skewed and cluttered images.
-Chosen over attempt 4 for the quad-quality edge, not because it wins on raw recall —
-`yolo26_doccorner_pose.py` was repointed at attempt 5 and `DEFAULT_METHOD` follows.
+degrades). Same dataset lineage as attempt 4, but scaled up significantly: 10,000
+training images, 1,000 validation, 1,000 test (vs attempt 4's 3,000/200/200), with
+better fine-tuning on top. Head-to-head against attempt 4 on my project's 38-image
+test set (results saved to `data/results/attempt4_yolo26/` and
+`data/results/attempt5_yolo26s/`): near-identical raw detection rate (27/38 vs attempt
+4's 28/38) but visibly tighter/cleaner quads on shared hits, especially on skewed and
+cluttered images. I chose this one over attempt 4 for the quad-quality edge, not
+because it wins on raw recall — I repointed `yolo26_doccorner_pose.py` at attempt 5
+and `DEFAULT_METHOD` follows.
 
-**Fallback architecture reworked from "first non-None wins" to "score-and-pick":**
+**I reworked the fallback architecture from "first non-None wins" to "score-and-pick":**
 the classical `FALLBACK_CHAIN` (`baseline`, `aspect_ratio`, `contrast_score`) used to
 return whichever method ran first and found *any* quad, even when a later method in
 the same chain had found a clearly better one for the same image (concrete example:
 `clean_02`, where `baseline`'s quad clips the document but `contrast_score`'s
-doesn't — `baseline` used to win purely by running first). Fixed by extracting a
-public `score_quad` from `contrast_score.py`'s internal scoring function and changing
-`pipeline.detect_boundary` to run every method in the chain, then pick the
+doesn't — `baseline` used to win purely by running first). I fixed this by extracting
+a public `score_quad` from `contrast_score.py`'s internal scoring function and
+changing `pipeline.detect_boundary` to run every method in the chain, then pick the
 single best-scoring quad across all of them — see `camscan/pipeline.py` and
-`camscan/boundary/contrast_score.py`. Verified against the existing 38-image set: same
-10/38 fallback-triggering images as before, but 3 of them now get a visibly better
-quad instead of the first-found one.
+`camscan/boundary/contrast_score.py`. I verified this against the existing 38-image
+set: same 10/38 fallback-triggering images as before, but 3 of them now get a visibly
+better quad instead of the first-found one.
 
-**Attempt 5 exported to ONNX for faster serving:** `model.export(format='onnx',
+**I exported attempt 5 to ONNX for faster serving:** `model.export(format='onnx',
 imgsz=800, opset=12, simplify=True)` → `model/attempt 5_yolo26s/weights/best.onnx`.
-Two integration issues found and fixed: (1) ONNX files don't carry Ultralytics' task
+I found and fixed two integration issues: (1) ONNX files don't carry Ultralytics' task
 metadata the way `.pt` checkpoints do, so loading without `task="pose"` silently
 misdetects as `task="detect"` and drops the keypoint head's output entirely — fixed by
 loading with `YOLO(path, task="pose")` explicitly; (2) `.to("cpu")` only works on
 PyTorch `nn.Module`-backed models and raises `TypeError` on an ONNX-loaded one — fixed
-by passing `device="cpu"` directly to `.predict()` instead. Benchmarked at ~2.4x
-faster per-image than the `.pt` model on this Jetson's CPU (1899.8ms → 779.6ms).
-Verified lossless: a full 38-image regression run against the ONNX-based pipeline
-produced the exact same 12/38 fallback list as attempt 5's original `.pt` weights —
-this is a serving-speed change, not a detection-quality change. `camscan/boundary/yolo26_doccorner_pose.py`
-now loads `model/attempt 5_yolo26s/weights/best.onnx` at `PREDICT_IMGSZ=800`.
+by passing `device="cpu"` directly to `.predict()` instead. I benchmarked this at
+~2.4x faster per-image than the `.pt` model on my Jetson's CPU (1899.8ms → 779.6ms).
+I verified it was lossless: a full 38-image regression run against the ONNX-based
+pipeline produced the exact same 12/38 fallback list as attempt 5's original `.pt`
+weights — this is a serving-speed change, not a detection-quality change.
+`camscan/boundary/yolo26_doccorner_pose.py` now loads
+`model/attempt 5_yolo26s/weights/best.onnx` at `PREDICT_IMGSZ=800`.
 
-**Repo cleanup:** removed `yolo_pose.py` and `yolo_hybrid.py` (broken since the
+**Repo cleanup:** I removed `yolo_pose.py` and `yolo_hybrid.py` (broken since the
 `model/` reorg — stale checkpoint path, documented 0/38 score, never fixed), the
 never-wired `yolo26_v2_pose.py` (attempt 3), and `yolo_v8_pose.py` (attempt 2 — a
 real, working comparison method at the time, but dropped along with `model/attempt
-1-4` in favor of standardizing the repo on attempt 5 as the single production model).
+1-4` in favor of standardizing the repo on attempt 5 as my single production model).
 `model/` now holds only attempt 5's `args.yaml`, `results.csv`/`results.png` (training
-report), and `weights/best.onnx` under git — intermediate epoch checkpoints
+report), and `weights/best.onnx` under git — I deleted intermediate epoch checkpoints
 (`epoch0/10/20/30.pt`, `last.pt`) and per-run training visualizations
-(label/batch/PR-curve/confusion-matrix images) were deleted as regenerable training
-scratch, and `.gitignore` now excludes `model/*/*.png|jpg|jpeg` except `results.png`.
-`.pt` weights stay gitignored as before (`best.pt` is kept locally for
-retraining/reference, not committed). `data/results/` trimmed to the outputs the
-current tooling (`compare.py`, `scripts/contact_sheet.py`) actually regenerates, plus
-the attempt4-vs-attempt5 comparison; stale outputs referencing deleted methods
-(`yolo_pose`, `yolo_hybrid`, `yolo_v8_pose`, `yolo26_v2_pose`) and superseded
-duplicate preview/contact-sheet directories from earlier ad-hoc runs were removed.
+(label/batch/PR-curve/confusion-matrix images) as regenerable training scratch, and
+`.gitignore` now excludes `model/*/*.png|jpg|jpeg` except `results.png`. `.pt` weights
+stay gitignored as before (`best.pt` is kept locally for retraining/reference, not
+committed). I trimmed `data/results/` to the outputs my current tooling (`compare.py`,
+`scripts/contact_sheet.py`) actually regenerates, plus the attempt4-vs-attempt5
+comparison; I removed stale outputs referencing deleted methods (`yolo_pose`,
+`yolo_hybrid`, `yolo_v8_pose`, `yolo26_v2_pose`) and superseded duplicate
+preview/contact-sheet directories from earlier ad-hoc runs.
 
-**Still open:** `onnxruntime` is only installed in the local dev venv, not yet added
-to `requirements.txt` — needs fixing before a fresh deploy (e.g. Hugging Face Spaces)
-can actually load the ONNX model.
+**Still open:** `onnxruntime` is only installed in my local dev venv, not yet added
+to `requirements.txt` — I need to fix this before a fresh deploy (e.g. Hugging Face
+Spaces) can actually load the ONNX model.
 
 ## 2026-07-27 — Deployed to Railway + Vercel, dropped ultralytics from the served
 path, added a real test suite
@@ -661,11 +686,3 @@ regress rather than broad coverage --
 Classical CV methods' exact pixel outputs were deliberately left untested at the unit
 level — `compare.py`'s scored regression suite already covers those, and they're
 inherently visual/fuzzy in a way unit tests don't suit well.
-
-**Environment quirk found while adding tests, not a project bug:** this machine has a
-system-wide ROS2 (Humble) install that registers broken `pytest11` entry-point plugins
-(`launch_testing`, missing its own `lark` dependency) globally, which crashes pytest's
-own startup inside this project's venv regardless of which packages the venv itself
-has installed. Worked around with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`; documented in the
-README's Run the tests section rather than worked around in-repo, since it's specific
-to this machine's global Python state, not something the project itself can fix.
