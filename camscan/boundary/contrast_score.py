@@ -25,6 +25,16 @@ def _contrast(quad, image, band_width=6):
     return float(np.linalg.norm(inside_mean - outside_mean))
 
 
+def score_quad(quad, image):
+    """Public wrapper around the area-weighted boundary-contrast score, so other
+    callers (the fallback chain in pipeline.py) can rank quads from *different*
+    detection methods on the same scale, instead of only using this inside
+    find_document_contour's own top_n candidate list."""
+    frame_area = image.shape[0] * image.shape[1]
+    area_ratio = cv2.contourArea(quad.astype(np.float32)) / frame_area
+    return _contrast(quad, image) * area_ratio
+
+
 def find_document_contour(edge_map, image, top_n=15, min_contrast=12):
     """Improvement 2 (Zhukovsky et al., 2020): rather than trusting contour area or
     shape alone, score each candidate quad by how different the pixels just inside its

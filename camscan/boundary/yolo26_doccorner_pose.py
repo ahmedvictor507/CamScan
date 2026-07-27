@@ -1,7 +1,10 @@
 import cv2
 import numpy as np
 
-CHECKPOINT_PATH = "model/attempt 4_yolo26/weights/best.pt"
+CHECKPOINT_PATH = "model/attempt 5_yolo26s/weights/best.onnx"
+# Trained at imgsz=800 (see model/attempt 5_yolo26s/args.yaml) -- unlike attempt 4
+# (640), predict() must be called at the same size the model was trained/exported at.
+PREDICT_IMGSZ = 800
 _model = None
 
 # Two detected boxes with IoU above this are treated as the same physical document
@@ -13,20 +16,24 @@ BATCH_DEDUP_IOU_THRESHOLD = 0.3
 
 
 def _get_model():
-    """Lazily loads this YOLO26n-pose corner detector -- same lazy-import pattern as
+    """Lazily loads this YOLO26s-pose corner detector -- same lazy-import pattern as
     the other learned methods, so importing this module doesn't cost torch/ultralytics
     init time unless this method is actually selected.
 
-    Forced to CPU, same reasoning as the other learned methods: this Jetson shares
-    physical RAM between CPU and GPU, and under normal desktop load there isn't enough
-    free to grow the CUDA allocator (confirmed by a real NvMapMemAllocInternalTagged OOM
-    on this box)."""
+    Loaded from the ONNX export (see docs/progress_log.md for the .pt-vs-ONNX
+    benchmark) rather than the raw .pt checkpoint -- ONNX Runtime measured ~2.4x
+    faster per-image on this box's CPU, and CPU is the only place this needs to run:
+    same reasoning as the other learned methods, this Jetson shares physical RAM
+    between CPU and GPU, and under normal desktop load there isn't enough free to grow
+    the CUDA allocator (confirmed by a real NvMapMemAllocInternalTagged OOM on this
+    box). task='pose' is passed explicitly since ONNX models don't carry task metadata
+    the way .pt checkpoints do -- without it ultralytics guesses 'detect' and silently
+    drops the keypoint head's output."""
     global _model
     if _model is None:
         from ultralytics import YOLO
 
-        _model = YOLO(CHECKPOINT_PATH)
-        _model.to("cpu")
+        _model = YOLO(CHECKPOINT_PATH, task="pose")
     return _model
 
 
@@ -60,7 +67,7 @@ def _box_iou(a, b):
 def _run_model(image, detection_image, conf):
     model = _get_model()
     predict_image = detection_image if detection_image is not None else image
-    results = model.predict(predict_image, imgsz=640, conf=conf, verbose=False)[0]
+    results = model.predict(predict_image, imgsz=PREDICT_IMGSZ, conf=conf, device="cpu", verbose=False)[0]
 
     if results.keypoints is None or len(results.boxes) == 0:
         return []
@@ -91,20 +98,20 @@ def _run_model(image, detection_image, conf):
 
 
 def find_document_contour(edge_map, image, conf=0.25, detection_image=None):
-    """Attempt 4: YOLO26n-pose retrained from scratch on 3000 images from the
-    Hugging Face DocCornerDataset (general document-corner images: varied
-    backgrounds/lighting/document types) instead of this project's original 500-image,
-    mostly-white-paper Roboflow set -- the dataset swap discussed after attempt 3's
-    `skewed`/backlit failures looked like a coverage gap rather than an epoch-count
-    problem. Reported training metrics are strong (pose mAP50-95 ~0.97), but that's
-    measured against DocCornerDataset's own held-out images, not this project's actual
-    test photos -- a real domain-shift risk this evaluation exists to catch.
+    """Attempt 5: YOLO26s-pose (larger backbone than attempt 4's YOLO26n), trained on
+    the same Hugging Face DocCornerDataset lineage as attempt 4. Head-to-head against
+    attempt 4 on this project's 38-image test set: near-identical raw detection rate
+    (27/38 vs attempt 4's 28/38) but visibly tighter/cleaner quads on shared hits
+    (skewed and cluttered images especially) -- see docs/progress_log.md for the full
+    comparison. Chosen over attempt 4 for the quad-quality edge plus the ONNX export
+    path (see _get_model's docstring), not because it wins on recall.
 
     Same interface and full-res-input convention as yolo_v8_pose.py /
-    yolo26_v2_pose.py: predicts at 640x640 on the original image, scales the resulting
-    quad back into the shared 500px detection space. No per-keypoint confidence gate
-    (same reasoning as the other direct-keypoint methods) -- only overall box
-    confidence (`conf`) filters detections.
+    yolo26_v2_pose.py: predicts at 800x800 (PREDICT_IMGSZ, matching this model's
+    training imgsz -- see model/attempt 5_yolo26s/args.yaml) on the original image,
+    scales the resulting quad back into the shared 500px detection space. No
+    per-keypoint confidence gate (same reasoning as the other direct-keypoint methods)
+    -- only overall box confidence (`conf`) filters detections.
 
     `edge_map` is accepted but unused, only to match the shared method signature used
     by pipeline.detect_boundary and compare.py.

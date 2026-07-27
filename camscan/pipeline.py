@@ -9,6 +9,7 @@ from camscan.preprocess import resize_for_detection, to_blurred_gray
 from camscan.edges import detect_edges
 from camscan.boundary.candidates import fallback_frame_contour
 from camscan.boundary import baseline, aspect_ratio, contrast_score
+from camscan.boundary.contrast_score import score_quad
 from camscan.warp import four_point_transform, deskew, detect_orientation, rotate_by
 from camscan import enhance
 from camscan.enhance import enhance_scan
@@ -22,7 +23,7 @@ METHODS = {
 }
 ALL_METHODS = list(METHODS) + ["sam", "yolo_pose", "yolo_hybrid", "yolo_v8_pose", "yolo26_doccorner_pose"]  # resolved lazily -- see _resolve_method
 _NEEDS_ORIGINAL_IMAGE = {"yolo_pose", "yolo_hybrid", "yolo_v8_pose", "yolo26_doccorner_pose"}
-DEFAULT_METHOD = "yolo26_doccorner_pose"  # attempt-4: best audited score so far, see docs/progress_log.md
+DEFAULT_METHOD = "yolo26_doccorner_pose"  # attempt-5 (ONNX): best audited score so far, see docs/progress_log.md
 
 
 def _resolve_method(method):
@@ -46,12 +47,14 @@ def _resolve_method(method):
     return METHODS[method]
 
 
-# Tried, in order, if `method` returns nothing -- a classical method's "wrong" quad is a
-# much better manual-edit starting point for a user than the full-frame fallback rect,
-# so exhaust these before giving up entirely. `baseline` is first since across every
-# method comparison run in this project it has consistently had the highest recall
-# (it still returns *a* quad more often than the others, even when it isn't the
-# tightest/most accurate one) -- see docs/progress_log.md.
+# Tried if `method` returns nothing -- a classical method's "wrong" quad is a much
+# better manual-edit starting point for a user than the full-frame fallback rect, so
+# exhaust these before giving up entirely. Unlike a simple ordered chain, every method
+# here is run and the results are scored against each other (see detect_boundary) --
+# an ordered "first non-None wins" chain was found to pick a badly-fit quad from an
+# earlier method even when a later method in the same chain had a much better one for
+# the same image (e.g. clean_02: baseline's quad clips the document, contrast_score's
+# doesn't) -- see docs/progress_log.md.
 FALLBACK_CHAIN = ("baseline", "aspect_ratio", "contrast_score")
 
 
@@ -62,10 +65,13 @@ def detect_boundary(resized_image, method="baseline", original_image=None):
     native training resolution instead of the shared 500px-wide detection frame every
     classical/SAM method uses (yolo_pose, and yolo_hybrid's YOLO localization step).
 
-    If `method` finds nothing, falls back through FALLBACK_CHAIN (skipping `method`
-    itself if it's already in the chain) before giving up to the full-frame rect --
-    a classical method's best-guess quad is a far better starting point for a user to
-    manually correct than "no crop at all", even if it isn't accurate enough to trust
+    If `method` finds nothing, every method in FALLBACK_CHAIN (skipping `method` itself
+    if it's already in the chain) is run and scored by boundary contrast (see
+    contrast_score.score_quad), and the single best-scoring quad across all of them is
+    kept -- not just whichever method happens to run first and return non-None. Falls
+    back to the full-frame rect only if every method in the chain returns nothing at
+    all: a classical method's best-guess quad is a far better starting point for a user
+    to manually correct than "no crop at all", even if it isn't accurate enough to trust
     unedited.
     """
     gray = to_blurred_gray(resized_image)
@@ -80,12 +86,17 @@ def detect_boundary(resized_image, method="baseline", original_image=None):
     if quad is not None:
         return quad, False
 
+    candidates = []
     for fallback_method in FALLBACK_CHAIN:
         if fallback_method == method:
             continue
         quad = run(fallback_method)
         if quad is not None:
-            return quad, True
+            candidates.append(quad)
+
+    if candidates:
+        best = max(candidates, key=lambda q: score_quad(q, resized_image))
+        return best, True
 
     return fallback_frame_contour(resized_image.shape), True
 
