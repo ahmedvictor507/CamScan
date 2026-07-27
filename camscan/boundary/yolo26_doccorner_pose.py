@@ -1,3 +1,5 @@
+from typing import Any
+
 import cv2
 import numpy as np
 
@@ -5,7 +7,7 @@ CHECKPOINT_PATH = "model/attempt 5_yolo26s/weights/best.onnx"
 # Trained at imgsz=800 (see model/attempt 5_yolo26s/args.yaml) -- unlike attempt 4
 # (640), inference must be run at the same size the model was trained/exported at.
 PREDICT_IMGSZ = 800
-_session = None
+_session: Any = None
 
 # Two detected boxes with IoU above this are treated as the same physical document
 # (near-duplicate detections) rather than two separate documents in a batch photo --
@@ -16,7 +18,7 @@ _session = None
 BATCH_DEDUP_IOU_THRESHOLD = 0.3
 
 
-def _get_session():
+def _get_session() -> Any:
     """Lazily loads this YOLO26s-pose corner detector via raw ONNX Runtime -- same
     lazy-import pattern as the other learned methods, so importing this module doesn't
     cost onnxruntime init time unless this method is actually selected.
@@ -29,7 +31,12 @@ def _get_session():
     (letterbox resize + pad) and postprocessing (box/keypoint coordinate unletterboxing)
     here were verified to numerically match ultralytics' own output on this checkpoint
     to 3+ decimal places before this rewrite -- box and keypoint coordinates are
-    reproduced exactly, not approximately."""
+    reproduced exactly, not approximately.
+
+    Returns an onnxruntime.InferenceSession -- typed as Any rather than importing
+    onnxruntime at module level, for the same lazy-import reason as sam_boundary.py's
+    _get_predictor.
+    """
     global _session
     if _session is None:
         import onnxruntime as ort
@@ -38,7 +45,7 @@ def _get_session():
     return _session
 
 
-def _order_corners(pts):
+def _order_corners(pts: np.ndarray) -> np.ndarray:
     """Orders 4 points as top-left, top-right, bottom-right, bottom-left, matching the
     convention warp.four_point_transform expects. Re-derived from geometry (TL/BR =
     smallest/largest coordinate sum, TR/BL = smallest/largest coordinate difference)
@@ -53,7 +60,7 @@ def _order_corners(pts):
     return rect
 
 
-def _box_iou(a, b):
+def _box_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
     ix1, iy1 = max(ax1, bx1), max(ay1, by1)
@@ -65,7 +72,7 @@ def _box_iou(a, b):
     return inter / union if union > 0 else 0.0
 
 
-def _letterbox(image, size):
+def _letterbox(image: np.ndarray, size: int) -> tuple[np.ndarray, float, int, int]:
     """Resizes `image` to fit within size x size preserving aspect ratio, then pads
     with 114-gray to a square -- matches ultralytics' own default preprocessing
     exactly (verified numerically against ultralytics.YOLO's output on this
@@ -85,7 +92,7 @@ def _letterbox(image, size):
     return padded, scale, left, top
 
 
-def _run_model(image, detection_image, conf):
+def _run_model(image: np.ndarray, detection_image: np.ndarray | None, conf: float) -> list[np.ndarray]:
     session = _get_session()
     predict_image = detection_image if detection_image is not None else image
 
@@ -137,7 +144,7 @@ def _run_model(image, detection_image, conf):
     return kept_quads
 
 
-def find_document_contour(edge_map, image, conf=0.25, detection_image=None):
+def find_document_contour(edge_map: np.ndarray, image: np.ndarray, conf: float = 0.25, detection_image: np.ndarray | None = None) -> np.ndarray | None:
     """Attempt 5: YOLO26s-pose (larger backbone than attempt 4's YOLO26n), trained on
     the same Hugging Face DocCornerDataset lineage as attempt 4. Head-to-head against
     attempt 4 on this project's 38-image test set: near-identical raw detection rate
@@ -160,7 +167,7 @@ def find_document_contour(edge_map, image, conf=0.25, detection_image=None):
     return quads[0] if quads else None
 
 
-def find_document_contours(image, conf=0.25, detection_image=None):
+def find_document_contours(image: np.ndarray, conf: float = 0.25, detection_image: np.ndarray | None = None) -> list[np.ndarray]:
     """Batch variant: returns every distinct document quad detected in one photo,
     instead of just the single best one find_document_contour keeps.
 

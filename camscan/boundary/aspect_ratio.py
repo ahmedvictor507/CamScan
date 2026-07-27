@@ -7,7 +7,7 @@ from camscan.warp import order_points
 TARGET_RATIOS = [297 / 210, 11 / 8.5]
 
 
-def _ratio_deviation(quad):
+def _ratio_deviation(quad: np.ndarray) -> float:
     tl, tr, br, bl = order_points(quad)
     width = max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl))
     height = max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr))
@@ -18,7 +18,7 @@ def _ratio_deviation(quad):
     return min(abs(ratio - target) for target in TARGET_RATIOS)
 
 
-def find_document_contour(edge_map, image=None, top_n=10, tolerance=0.35):
+def find_document_contour(edge_map: np.ndarray, image: np.ndarray | None = None, top_n: int = 10, tolerance: float = 0.35) -> np.ndarray | None:
     """Improvement 1: among the largest candidate quads, prefer the one whose
     aspect ratio is closest to a known document format (A4/Letter), instead of
     blindly taking the single largest quad. Rejects the whole frame if nothing

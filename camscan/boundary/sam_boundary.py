@@ -1,15 +1,22 @@
+from typing import Any
+
 import cv2
 import numpy as np
 
 CHECKPOINT_PATH = "models/mobile_sam.pt"
-_predictor = None
+_predictor: Any = None
 
 
-def _get_predictor():
+def _get_predictor() -> Any:
     """Lazily loads MobileSAM (torch/model init is slow and unnecessary for the
     classical methods) -- a lighter, same-API distillation of Segment Anything, chosen
     over full SAM because this Jetson has under 1GB of RAM free under normal desktop
-    load; SAM ViT-B's encoder is heavy enough to risk OOM/thrashing here."""
+    load; SAM ViT-B's encoder is heavy enough to risk OOM/thrashing here.
+
+    Returns a mobile_sam.SamPredictor -- typed as Any rather than importing that class
+    at module level, since the whole point of this lazy-loading pattern is to keep the
+    torch/mobile_sam import cost out of the common path where this method isn't used.
+    """
     global _predictor
     if _predictor is None:
         from mobile_sam import SamPredictor, sam_model_registry
@@ -26,13 +33,13 @@ def _get_predictor():
     return _predictor
 
 
-def _largest_contour(mask):
+def _largest_contour(mask: np.ndarray) -> np.ndarray | None:
     mask_u8 = (mask * 255).astype(np.uint8)
     contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     return max(contours, key=cv2.contourArea) if contours else None
 
 
-def _mask_to_quad(mask, contour):
+def _mask_to_quad(mask: np.ndarray, contour: np.ndarray) -> tuple[tuple, np.ndarray]:
     # a segmentation mask's outline isn't guaranteed to already be a clean polygon
     # (rounded corners, a slightly curled page edge) the way a Canny contour's
     # approxPolyDP candidates are expected to be -- minAreaRect fits the tightest
@@ -42,7 +49,7 @@ def _mask_to_quad(mask, contour):
     return rect, cv2.boxPoints(rect)
 
 
-def _rect_fill_ratio(mask, rect):
+def _rect_fill_ratio(mask: np.ndarray, rect: tuple) -> float:
     """actual foreground pixel count vs. the area of the mask's own minimum bounding
     rotated rectangle. Close to 1.0 for a solid rectangular blob. With a box prompt
     that covers most of the image, SAM sometimes segments the background frame *around*
@@ -56,7 +63,7 @@ def _rect_fill_ratio(mask, rect):
     return mask.sum() / rect_area if rect_area > 0 else 0.0
 
 
-def find_document_contour(edge_map, image, box_margin=0.05, min_area_ratio=0.05, min_rect_fill=0.85):
+def find_document_contour(edge_map: np.ndarray, image: np.ndarray, box_margin: float = 0.05, min_area_ratio: float = 0.05, min_rect_fill: float = 0.85) -> np.ndarray | None:
     """Stretch goal: MobileSAM with a box prompt covering most of the frame, as a
     learned-method comparison point against the classical candidate-and-rescore
     methods. Prompted with a large centered box so SAM segments the single dominant

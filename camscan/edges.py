@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 
-def detect_edges(gray, sigma=0.33):
+def detect_edges(gray: np.ndarray, sigma: float = 0.33) -> np.ndarray:
     # thresholds relative to the image's own median intensity, instead of one fixed
     # global pair -- a threshold tuned for a high-contrast photo silently misses the
     # boundary in a low-contrast one (dark document on a dark background)

@@ -12,7 +12,7 @@ MIN_LINE_LENGTH_RATIO = 0.25
 MAX_CORRECTABLE_SKEW_DEGREES = 15.0
 
 
-def _dominant_text_angle(bgr):
+def _dominant_text_angle(bgr: np.ndarray) -> float:
     """Estimates how far the page's dominant line direction (text lines, ruled paper,
     table borders) is from perfectly horizontal, in degrees. Returns 0.0 if there
     isn't a clear enough dominant angle to act on."""
@@ -53,7 +53,7 @@ def _dominant_text_angle(bgr):
     return median_angle
 
 
-def _horizontal_line_energy(gray):
+def _horizontal_line_energy(gray: np.ndarray) -> float:
     """Scores how strongly a page's dominant line structure (text lines, ruled
     paper, table borders) is horizontal, by summing ink per row and looking at the
     variance across rows -- upright text alternates between text-line rows (high ink)
@@ -65,7 +65,7 @@ def _horizontal_line_energy(gray):
     return float(np.var(row_ink))
 
 
-def detect_orientation(bgr):
+def detect_orientation(bgr: np.ndarray) -> int:
     """Detects whether the page is sideways (90 or 270 degrees from upright) and
     returns the rotation (0, 90, 180, or 270) needed to make its dominant line
     structure horizontal again -- e.g. if the user held their phone in landscape,
@@ -92,7 +92,7 @@ def detect_orientation(bgr):
     return 0
 
 
-def rotate_by(bgr, degrees):
+def rotate_by(bgr: np.ndarray, degrees: int) -> np.ndarray:
     """Rotates by a multiple of 90 degrees (clockwise). No-op for 0."""
     if degrees == 90:
         return cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE)
@@ -103,7 +103,7 @@ def rotate_by(bgr, degrees):
     return bgr
 
 
-def deskew(bgr):
+def deskew(bgr: np.ndarray) -> np.ndarray:
     """Rotates a warped document image so its dominant text/ruling lines are
     horizontal. The 4-point perspective warp already squares up the page's outer
     boundary into a rectangle, but the detected corners are only an approximation of
@@ -119,7 +119,7 @@ def deskew(bgr):
     return cv2.warpAffine(bgr, matrix, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
 
 
-def order_points(pts):
+def order_points(pts: np.ndarray) -> np.ndarray:
     pts = pts.astype("float32")
     s = pts.sum(axis=1)
     diff = np.diff(pts, axis=1)
@@ -132,7 +132,7 @@ def order_points(pts):
     return ordered
 
 
-def four_point_transform(image, pts):
+def four_point_transform(image: np.ndarray, pts: np.ndarray) -> np.ndarray:
     tl, tr, br, bl = order_points(pts)
 
     width_top = np.linalg.norm(tr - tl)

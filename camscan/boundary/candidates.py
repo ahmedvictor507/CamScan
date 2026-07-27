@@ -3,7 +3,7 @@ import imutils
 import numpy as np
 
 
-def quad_candidates(edge_map, top_n=10, min_area_ratio=0.02):
+def quad_candidates(edge_map: np.ndarray, top_n: int = 10, min_area_ratio: float = 0.02) -> list[np.ndarray]:
     """Largest closed contours in the edge map that reduce to a convex 4-point polygon,
     ordered by area (largest first). Candidates smaller than min_area_ratio of the frame
     are dropped -- approxPolyDP can collapse a noisy sliver contour into a technically
@@ -26,7 +26,7 @@ def quad_candidates(edge_map, top_n=10, min_area_ratio=0.02):
     return quads
 
 
-def _approx_to_quad(hull, start=0.02, stop=0.10, step=0.01):
+def _approx_to_quad(hull: np.ndarray, start: float = 0.02, stop: float = 0.10, step: float = 0.01) -> np.ndarray | None:
     """approxPolyDP at a fixed epsilon often leaves a document's outline at 5-6 points
     (one corner slightly rounded or doubled) even after the convex hull cleanup --
     stepping the epsilon up until it collapses to exactly 4 recovers those near-quads
@@ -41,6 +41,6 @@ def _approx_to_quad(hull, start=0.02, stop=0.10, step=0.01):
     return None
 
 
-def fallback_frame_contour(image_shape):
+def fallback_frame_contour(image_shape: tuple[int, ...]) -> np.ndarray:
     h, w = image_shape[:2]
     return np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]])

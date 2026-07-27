@@ -4,7 +4,7 @@ import numpy as np
 from camscan.boundary.candidates import quad_candidates
 
 
-def _boundary_bands(quad, frame_shape, band_width=6):
+def _boundary_bands(quad: np.ndarray, frame_shape: tuple[int, ...], band_width: int = 6) -> tuple[np.ndarray, np.ndarray]:
     """Thin ring of pixels just inside the quad boundary, and another just outside."""
     mask = np.zeros(frame_shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask, [quad.astype(np.int32)], 255)
@@ -15,7 +15,7 @@ def _boundary_bands(quad, frame_shape, band_width=6):
     return inside_band, outside_band
 
 
-def _contrast(quad, image, band_width=6):
+def _contrast(quad: np.ndarray, image: np.ndarray, band_width: int = 6) -> float:
     inside_band, outside_band = _boundary_bands(quad, image.shape, band_width)
     if inside_band.sum() == 0 or outside_band.sum() == 0:
         return -1.0
@@ -25,7 +25,7 @@ def _contrast(quad, image, band_width=6):
     return float(np.linalg.norm(inside_mean - outside_mean))
 
 
-def score_quad(quad, image):
+def score_quad(quad: np.ndarray, image: np.ndarray) -> float:
     """Public wrapper around the area-weighted boundary-contrast score, so other
     callers (the fallback chain in pipeline.py) can rank quads from *different*
     detection methods on the same scale, instead of only using this inside
@@ -35,7 +35,7 @@ def score_quad(quad, image):
     return _contrast(quad, image) * area_ratio
 
 
-def find_document_contour(edge_map, image, top_n=15, min_contrast=12):
+def find_document_contour(edge_map: np.ndarray, image: np.ndarray, top_n: int = 15, min_contrast: float = 12) -> np.ndarray | None:
     """Improvement 2 (Zhukovsky et al., 2020): rather than trusting contour area or
     shape alone, score each candidate quad by how different the pixels just inside its
     border look from the pixels just outside -- a real document boundary is a strong,

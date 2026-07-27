@@ -21,19 +21,19 @@ GRAY_CLIP_RANGE = (0.0, 3.5)
 DEFAULT_STRENGTH = 50
 
 
-def _lerp(range_, strength):
+def _lerp(range_: tuple[float, float], strength: int) -> float:
     lo, hi = range_
     t = max(0, min(100, strength)) / 100.0
     return lo + (hi - lo) * t
 
 
-def _is_color_document(warped_bgr):
+def _is_color_document(warped_bgr: np.ndarray) -> bool:
     b, g, r = (warped_bgr[:, :, i].astype(np.int16) for i in range(3))
     spread = np.maximum(np.maximum(b, g), r) - np.minimum(np.minimum(b, g), r)
     return float(np.median(spread)) > COLOR_CHANNEL_SPREAD_THRESHOLD
 
 
-def _enhance_gray_page(warped_bgr, strength=DEFAULT_STRENGTH):
+def _enhance_gray_page(warped_bgr: np.ndarray, strength: int = DEFAULT_STRENGTH) -> np.ndarray:
     """Scanner-like look that keeps continuous gray tones instead of snapping every
     pixel to pure black/white -- real scanner apps ship this as a distinct "gray mode"
     separate from their hard black & white filter, because thresholding (see
@@ -57,7 +57,7 @@ def _enhance_gray_page(warped_bgr, strength=DEFAULT_STRENGTH):
     return normalized
 
 
-def _enhance_text_page(warped_bgr, strength=DEFAULT_STRENGTH):
+def _enhance_text_page(warped_bgr: np.ndarray, strength: int = DEFAULT_STRENGTH) -> np.ndarray:
     """Hard black & white: adaptive thresholding lifts text against its local
     background. Adaptive (not global) so uneven lighting across the page doesn't wash
     out one side. This mode inherently produces a jagged, fax-like look -- no midtones,
@@ -81,7 +81,7 @@ def _enhance_text_page(warped_bgr, strength=DEFAULT_STRENGTH):
     )
 
 
-def _enhance_color_page(warped_bgr, strength=DEFAULT_STRENGTH):
+def _enhance_color_page(warped_bgr: np.ndarray, strength: int = DEFAULT_STRENGTH) -> np.ndarray:
     """Contrast/brightness correction that keeps color -- binarizing a cover or photo
     would destroy the actual content, so this only normalizes lighting and lifts
     contrast instead of thresholding to black & white. No detailEnhance sharpening --
@@ -96,7 +96,7 @@ def _enhance_color_page(warped_bgr, strength=DEFAULT_STRENGTH):
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
-def enhance_scan(warped_bgr, mode="auto", strength=DEFAULT_STRENGTH):
+def enhance_scan(warped_bgr: np.ndarray, mode: str = "auto", strength: int = DEFAULT_STRENGTH) -> np.ndarray:
     """Turns a flattened (perspective-warped) document photo into a "scanned" look.
 
     mode: "auto" (default) picks a soft grayscale look for plain text pages and a

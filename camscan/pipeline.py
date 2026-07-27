@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -26,7 +27,7 @@ _NEEDS_ORIGINAL_IMAGE = {"yolo26_doccorner_pose"}
 DEFAULT_METHOD = "yolo26_doccorner_pose"  # attempt-5 (ONNX): best audited score so far, see docs/progress_log.md
 
 
-def _resolve_method(method):
+def _resolve_method(method: str) -> Callable[..., np.ndarray | None]:
     if method == "sam":
         # deferred: importing torch/mobile_sam costs real time and memory, not worth
         # paying on every run of the (fast, lightweight) classical methods
@@ -49,7 +50,7 @@ def _resolve_method(method):
 FALLBACK_CHAIN = ("baseline", "aspect_ratio", "contrast_score")
 
 
-def detect_boundary(resized_image, method="baseline", original_image=None):
+def detect_boundary(resized_image: np.ndarray, method: str = "baseline", original_image: np.ndarray | None = None) -> tuple[np.ndarray, bool]:
     """Returns (quad, used_fallback) in the resized image's coordinate space.
 
     `original_image` is optional and only used by methods that do better fed their
@@ -92,7 +93,7 @@ def detect_boundary(resized_image, method="baseline", original_image=None):
     return fallback_frame_contour(resized_image.shape), True
 
 
-def detect(image_path, method=DEFAULT_METHOD):
+def detect(image_path: str | Path, method: str = DEFAULT_METHOD) -> tuple[np.ndarray, np.ndarray, float, np.ndarray, bool]:
     """Detection-only step: loads the photo and returns (original, resized, ratio,
     quad, used_fallback). Split out from warp/enhance so a caller (e.g. a future UI)
     can show the detected quad to a user and accept manual corrections to it before
@@ -108,7 +109,7 @@ def detect(image_path, method=DEFAULT_METHOD):
     return original, resized, ratio, quad, used_fallback
 
 
-def detect_batch(image_path):
+def detect_batch(image_path: str | Path) -> tuple[np.ndarray, np.ndarray, float, list[np.ndarray]]:
     """Batch variant of detect(): returns (original, resized, ratio, quads) where
     `quads` is a list of zero or more document quads found in one photo, instead of
     detect()'s single best quad. Only meaningful for yolo26_doccorner_pose -- the
@@ -130,7 +131,7 @@ def detect_batch(image_path):
     return original, resized, ratio, quads
 
 
-def warp_and_enhance(original, quad, ratio, enhance_mode="auto", enhance_strength=enhance.DEFAULT_STRENGTH, manual_rotation=0):
+def warp_and_enhance(original: np.ndarray, quad: np.ndarray, ratio: float, enhance_mode: str = "auto", enhance_strength: int = enhance.DEFAULT_STRENGTH, manual_rotation: int = 0) -> np.ndarray:
     """Takes a quad in the resized image's coordinate space (either straight from
     detect(), or edited by a user first) and produces the final enhanced scan.
 
@@ -151,7 +152,7 @@ def warp_and_enhance(original, quad, ratio, enhance_mode="auto", enhance_strengt
     return enhance_scan(warped, mode=enhance_mode, strength=enhance_strength)
 
 
-def scan(image_path, method=DEFAULT_METHOD, enhance_mode="auto", enhance_strength=enhance.DEFAULT_STRENGTH, manual_rotation=0, debug_dir=None):
+def scan(image_path: str | Path, method: str = DEFAULT_METHOD, enhance_mode: str = "auto", enhance_strength: int = enhance.DEFAULT_STRENGTH, manual_rotation: int = 0, debug_dir: str | Path | None = None) -> tuple[np.ndarray, bool]:
     """Convenience wrapper for the CLI/simple callers: runs detect() then
     warp_and_enhance() back-to-back with no manual-edit step in between."""
     original, resized, ratio, quad, used_fallback = detect(image_path, method=method)
@@ -165,7 +166,7 @@ def scan(image_path, method=DEFAULT_METHOD, enhance_mode="auto", enhance_strengt
     return enhanced, used_fallback
 
 
-def save_output(image, output_path):
+def save_output(image: np.ndarray, output_path: Path) -> None:
     """Writes `image` (a cv2 array, either grayscale/binary or BGR color) to
     `output_path`. PNG/JPG/TIFF/WEBP go through cv2 directly; PDF doesn't have cv2
     support, so it's routed through Pillow instead -- a single-page PDF wrapping the
@@ -185,7 +186,7 @@ def save_output(image, output_path):
         cv2.imwrite(str(output_path), image)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Scan a document photo into a flat, enhanced image.")
     parser.add_argument("image", type=Path, help="Path to the input photo")
     parser.add_argument("-o", "--output", type=Path, default=None, help="Output path (default: <name>_scan.png next to input)")
