@@ -123,13 +123,46 @@ different the pixels just inside vs. just outside the boundary look) helps in so
 conditions but is still limited by uneven lighting; no single method dominates every
 condition.
 
+<table>
+<tr><td><img src="docs/contact_sheets/baseline_cluttered.png" width="420"><br><sub><b>baseline</b> — cluttered (0/8 automated): no content check at all, locks onto whatever closed contour is largest</sub></td>
+<td><img src="docs/contact_sheets/contrast_score_cluttered.png" width="420"><br><sub><b>+ contrast scoring</b> — cluttered (8/8 automated, clearly fewer on visual inspection): several of these still clip into background clutter (04, 07, 08) despite passing the automated area/fallback check</sub></td></tr>
+</table>
+
+**Why `aspect_ratio` (32/38) scores higher than the production YOLO model (~27-28/38)
+here, and why that's not the deciding factor:** the score above is an *automated*
+proxy — it only checks "found a non-fallback quad covering 10-98% of the frame," which
+can't tell a quad that's roughly the right size from a quad that's actually on the
+document. The `contrast_score_cluttered.png` sheet above is a direct example: it
+scores 8/8 automated, but visually inspecting it shows several quads (04, 07, 08)
+clipping into a second document or ruler/background object in frame — a confidently
+wrong answer the automated check can't catch, not a real success. Manually auditing
+overlays against what they actually detect (see `docs/progress_log.md`) knocked
+classical methods' effective scores down more than the YOLO models' — e.g. attempt 2's
+automated 32/38 audited down to 28/38 for the same reason. Classical methods' failures
+tend to be **confidently wrong** (a plausible-looking but incorrect quad); the YOLO
+model's failures tend to be **honest misses** (no detection at all, correctly
+triggering the fallback chain) — worse on paper, safer in a product where a
+wrong-but-confident crop is harder for a user to catch than an obvious failure.
+
 ### SAM (MobileSAM, box-prompt segmentation)
 
-A learned-segmentation stretch goal, prompted with the classical pipeline's best
-candidate box. Landed at 23/38 — better than any single classical method, but with
-the same "right region, wrong shape" blind spot on cluttered/ambiguous scenes. A
-second-prompt pooling variant was tried and reverted after a full audit showed no
-real improvement.
+A learned-segmentation stretch goal, prompted with a large box covering most of the
+frame so it segments the dominant object rather than the background. Landed at 23/38
+— better than any single classical method, but **worse than the production YOLO
+model (~27-28/38)**, for a structural reason: SAM answers *"what is the object"* (a
+pixel mask), not *"where are its corners"* — getting from a mask to a usable quad
+still needs a separate geometric fitting step (`_mask_to_quad`'s `cv2.minAreaRect`),
+which loses precision on cluttered/ambiguous scenes the same way the classical methods
+do. A trained keypoint-regression model skips that step entirely by predicting the 4
+corners directly. Fine-tuning SAM for this task specifically would also need the same
+corner-labeled dataset the YOLO models used — so there's no labeling-effort argument
+for choosing SAM over a pose model either.
+
+A second-prompt pooling variant (seeding a tighter second box from the classical
+candidate generator) was tried to fix SAM's cluttered-scene weakness specifically, and
+reverted after a full audit showed it introduced new confidently-wrong answers
+(previously honest fallbacks became wrong-but-claimed-successful) for one modest,
+still-imperfect fix elsewhere — a net negative, not an improvement.
 
 ### Trained YOLO-pose corner detectors (5 attempts)
 
@@ -150,6 +183,28 @@ was diagnosed. Attempts 2 and 4 were both real working checkpoints at different
 points in the project; the repo has since been consolidated to keep only attempt 5's
 files, as the single production model, rather than carrying multiple large
 checkpoints.
+
+**How attempt 5 was chosen over attempt 4 despite a near-identical raw score:**
+raw detection count alone couldn't separate them (27/38 vs 28/38 — within noise), so
+the tie-break was visual quad quality on the same images, side by side:
+
+![Attempt 4 vs attempt 5 quad quality comparison](docs/attempt4_vs_attempt5.jpg)
+
+*Top row (`skewed_02`):* attempt 4 (conf 0.51) draws a quad whose top edge cuts
+diagonally across the *facing* page instead of following this page's actual top
+edge — a confidently-wrong boundary, not a miss. Attempt 5 (conf 0.73) follows the
+true page edge cleanly, with meaningfully higher confidence.
+
+*Bottom row (`cluttered_06`):* attempt 4 produces two overlapping, jittery boxes over
+the same physical page (conf 0.48 each — the near-duplicate-detection issue
+`BATCH_DEDUP_IOU_THRESHOLD` exists to filter out in the batch-scan path). Attempt 5
+produces one clean, tight quad at conf 0.85, precisely following the page's real
+edge even against the cluttered background (a notebook page and a second book cover
+underneath).
+
+This is the same "don't trust the raw score alone" principle applied to comparing two
+close model checkpoints, not just to classical-vs-learned: when two methods are close
+on paper, look at what they actually draw.
 
 ### Fallback architecture
 
