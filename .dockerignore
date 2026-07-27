@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+.git/
+.claude/
+frontend/
+data/
+docs/
+example/
+scripts/
+models/
+model/attempt 5_yolo26s/weights/*.pt
+*.md

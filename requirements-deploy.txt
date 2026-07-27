@@ -1,0 +1,14 @@
+# Trimmed dependency set for the deployed API (Dockerfile) -- excludes ultralytics
+# and its torch/torchvision dependency (~4GB) since the deployed detection path
+# (camscan/boundary/yolo26_doccorner_pose.py) runs inference through onnxruntime
+# directly. See requirements.txt for the full local-dev set (training, .pt-based
+# comparison methods, ONNX export).
+opencv-python-headless>=4.9
+numpy>=1.24,<2
+imutils>=0.5.4
+scikit-image>=0.22
+pillow>=10.0
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+onnxruntime>=1.23

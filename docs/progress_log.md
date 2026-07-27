@@ -509,3 +509,81 @@ after the `model/` reorg and needs updating to
 `model/attempt 1_yolo26/best(3).pt` before that method (or `yolo_hybrid`, which
 depends on it) can run again. `mobile_sam` is missing from the environment and `sam`
 could not be run this session.
+
+## 2026-07-27 — Frontend built, attempt 5 (YOLO26s-pose, 800px) trained and swapped in as
+production, fallback architecture reworked, and full ONNX conversion
+
+A Next.js/FastAPI frontend (`frontend/`, `api/main.py`) was built around the pipeline
+in this same stretch: detect → manual quad correction → warp/enhance → export,
+backed by an in-memory per-session store (`api/main.py`'s `_SESSIONS`, 30-minute TTL,
+no database — deliberate for a single-instance deployment, see the ONNX/deployment
+section below for the scaling tradeoff this implies).
+
+**Attempt 3 (`model/attempt 3_yolo26/`):** another YOLO26n-pose run, same dataset
+lineage as attempt 1, imgsz 640. Superseded by attempt 4 and never wired into the
+pipeline (`yolo26_v2_pose.py` existed but was never added to `ALL_METHODS`) — removed
+during the 2026-07-27 cleanup pass below as genuinely dead code, not just unused.
+
+**Attempt 4 (`model/attempt 4_yolo26/`):** a cleaner YOLO26n-pose run than attempt 1
+on the same 640px/50-epoch recipe, wired in as `yolo26_doccorner_pose.py` and made
+`DEFAULT_METHOD`. Became the production model ahead of this entry (best audited score
+at the time) — full attempt-4 numbers were superseded by attempt 5 below before a
+dedicated log entry was written for attempt 4 in isolation.
+
+**Attempt 5 (`model/attempt 5_yolo26s/`):** a larger-backbone run — `yolo26s-pose.pt`
+instead of attempt 4's `yolo26n-pose.pt`, 80 epochs (vs 50), trained at **imgsz 800**
+(vs attempt 4's 640 — this model must be predicted at 800, not 640, or accuracy
+degrades). Head-to-head against attempt 4 on this project's 38-image test set (results
+saved to `data/results/attempt4_yolo26/` and `data/results/attempt5_yolo26s/`):
+near-identical raw detection rate (27/38 vs attempt 4's 28/38) but visibly
+tighter/cleaner quads on shared hits, especially on skewed and cluttered images.
+Chosen over attempt 4 for the quad-quality edge, not because it wins on raw recall —
+`yolo26_doccorner_pose.py` was repointed at attempt 5 and `DEFAULT_METHOD` follows.
+
+**Fallback architecture reworked from "first non-None wins" to "score-and-pick":**
+the classical `FALLBACK_CHAIN` (`baseline`, `aspect_ratio`, `contrast_score`) used to
+return whichever method ran first and found *any* quad, even when a later method in
+the same chain had found a clearly better one for the same image (concrete example:
+`clean_02`, where `baseline`'s quad clips the document but `contrast_score`'s
+doesn't — `baseline` used to win purely by running first). Fixed by extracting a
+public `score_quad` from `contrast_score.py`'s internal scoring function and changing
+`pipeline.detect_boundary` to run every method in the chain, then pick the
+single best-scoring quad across all of them — see `camscan/pipeline.py` and
+`camscan/boundary/contrast_score.py`. Verified against the existing 38-image set: same
+10/38 fallback-triggering images as before, but 3 of them now get a visibly better
+quad instead of the first-found one.
+
+**Attempt 5 exported to ONNX for faster serving:** `model.export(format='onnx',
+imgsz=800, opset=12, simplify=True)` → `model/attempt 5_yolo26s/weights/best.onnx`.
+Two integration issues found and fixed: (1) ONNX files don't carry Ultralytics' task
+metadata the way `.pt` checkpoints do, so loading without `task="pose"` silently
+misdetects as `task="detect"` and drops the keypoint head's output entirely — fixed by
+loading with `YOLO(path, task="pose")` explicitly; (2) `.to("cpu")` only works on
+PyTorch `nn.Module`-backed models and raises `TypeError` on an ONNX-loaded one — fixed
+by passing `device="cpu"` directly to `.predict()` instead. Benchmarked at ~2.4x
+faster per-image than the `.pt` model on this Jetson's CPU (1899.8ms → 779.6ms).
+Verified lossless: a full 38-image regression run against the ONNX-based pipeline
+produced the exact same 12/38 fallback list as attempt 5's original `.pt` weights —
+this is a serving-speed change, not a detection-quality change. `camscan/boundary/yolo26_doccorner_pose.py`
+now loads `model/attempt 5_yolo26s/weights/best.onnx` at `PREDICT_IMGSZ=800`.
+
+**Repo cleanup:** removed `yolo_pose.py` and `yolo_hybrid.py` (broken since the
+`model/` reorg — stale checkpoint path, documented 0/38 score, never fixed), the
+never-wired `yolo26_v2_pose.py` (attempt 3), and `yolo_v8_pose.py` (attempt 2 — a
+real, working comparison method at the time, but dropped along with `model/attempt
+1-4` in favor of standardizing the repo on attempt 5 as the single production model).
+`model/` now holds only attempt 5's `args.yaml`, `results.csv`/`results.png` (training
+report), and `weights/best.onnx` under git — intermediate epoch checkpoints
+(`epoch0/10/20/30.pt`, `last.pt`) and per-run training visualizations
+(label/batch/PR-curve/confusion-matrix images) were deleted as regenerable training
+scratch, and `.gitignore` now excludes `model/*/*.png|jpg|jpeg` except `results.png`.
+`.pt` weights stay gitignored as before (`best.pt` is kept locally for
+retraining/reference, not committed). `data/results/` trimmed to the outputs the
+current tooling (`compare.py`, `scripts/contact_sheet.py`) actually regenerates, plus
+the attempt4-vs-attempt5 comparison; stale outputs referencing deleted methods
+(`yolo_pose`, `yolo_hybrid`, `yolo_v8_pose`, `yolo26_v2_pose`) and superseded
+duplicate preview/contact-sheet directories from earlier ad-hoc runs were removed.
+
+**Still open:** `onnxruntime` is only installed in the local dev venv, not yet added
+to `requirements.txt` — needs fixing before a fresh deploy (e.g. Hugging Face Spaces)
+can actually load the ONNX model.

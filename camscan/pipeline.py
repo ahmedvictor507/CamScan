@@ -21,8 +21,8 @@ METHODS = {
     "aspect_ratio": aspect_ratio.find_document_contour,
     "contrast_score": contrast_score.find_document_contour,
 }
-ALL_METHODS = list(METHODS) + ["sam", "yolo_pose", "yolo_hybrid", "yolo_v8_pose", "yolo26_doccorner_pose"]  # resolved lazily -- see _resolve_method
-_NEEDS_ORIGINAL_IMAGE = {"yolo_pose", "yolo_hybrid", "yolo_v8_pose", "yolo26_doccorner_pose"}
+ALL_METHODS = list(METHODS) + ["sam", "yolo26_doccorner_pose"]  # resolved lazily -- see _resolve_method
+_NEEDS_ORIGINAL_IMAGE = {"yolo26_doccorner_pose"}
 DEFAULT_METHOD = "yolo26_doccorner_pose"  # attempt-5 (ONNX): best audited score so far, see docs/progress_log.md
 
 
@@ -32,15 +32,6 @@ def _resolve_method(method):
         # paying on every run of the (fast, lightweight) classical methods
         from camscan.boundary import sam_boundary
         return sam_boundary.find_document_contour
-    if method == "yolo_pose":
-        from camscan.boundary import yolo_pose
-        return yolo_pose.find_document_contour
-    if method == "yolo_hybrid":
-        from camscan.boundary import yolo_hybrid
-        return yolo_hybrid.find_document_contour
-    if method == "yolo_v8_pose":
-        from camscan.boundary import yolo_v8_pose
-        return yolo_v8_pose.find_document_contour
     if method == "yolo26_doccorner_pose":
         from camscan.boundary import yolo26_doccorner_pose
         return yolo26_doccorner_pose.find_document_contour
@@ -63,7 +54,7 @@ def detect_boundary(resized_image, method="baseline", original_image=None):
 
     `original_image` is optional and only used by methods that do better fed their
     native training resolution instead of the shared 500px-wide detection frame every
-    classical/SAM method uses (yolo_pose, and yolo_hybrid's YOLO localization step).
+    classical/SAM method uses (yolo26_doccorner_pose).
 
     If `method` finds nothing, every method in FALLBACK_CHAIN (skipping `method` itself
     if it's already in the chain) is run and scored by boundary contrast (see

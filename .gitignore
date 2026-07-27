@@ -9,3 +9,11 @@ data/results/*
 models/
 .DS_Store
 .claude/
+
+# Only keep the ONNX export + training report (results.csv/results.png) from the
+# current production model (attempt 5); everything else under model/ is regenerable
+# training scratch (label/batch visualizations, PR curves, confusion matrices).
+model/*/*.png
+model/*/*.jpg
+model/*/*.jpeg
+!model/attempt 5_yolo26s/results.png

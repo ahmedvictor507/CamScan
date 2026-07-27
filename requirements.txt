@@ -7,3 +7,11 @@ pillow>=10.0
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
+onnxruntime>=1.23
+
+# ultralytics (+ torch/torchvision, ~4GB) is only needed for local dev: training,
+# running the .pt-based comparison methods, and re-exporting to ONNX. The deployed API
+# (camscan/boundary/yolo26_doccorner_pose.py) runs inference through onnxruntime
+# directly and does not import ultralytics -- see requirements-deploy.txt for the
+# trimmed set actually used in the Docker image.
+ultralytics>=8.3

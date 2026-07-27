@@ -3,38 +3,39 @@ import numpy as np
 
 CHECKPOINT_PATH = "model/attempt 5_yolo26s/weights/best.onnx"
 # Trained at imgsz=800 (see model/attempt 5_yolo26s/args.yaml) -- unlike attempt 4
-# (640), predict() must be called at the same size the model was trained/exported at.
+# (640), inference must be run at the same size the model was trained/exported at.
 PREDICT_IMGSZ = 800
-_model = None
+_session = None
 
 # Two detected boxes with IoU above this are treated as the same physical document
 # (near-duplicate detections) rather than two separate documents in a batch photo --
-# empirically, Ultralytics' own NMS (iou=0.7 default) doesn't merge every near-duplicate
-# this model produces; see find_document_contours' docstring for a real example where
-# two boxes over the same page survived default NMS with only moderate overlap.
+# empirically, the model's own baked-in NMS (opset export default) doesn't merge every
+# near-duplicate this model produces; see find_document_contours' docstring for a real
+# example where two boxes over the same page survived default NMS with only moderate
+# overlap.
 BATCH_DEDUP_IOU_THRESHOLD = 0.3
 
 
-def _get_model():
-    """Lazily loads this YOLO26s-pose corner detector -- same lazy-import pattern as
-    the other learned methods, so importing this module doesn't cost torch/ultralytics
-    init time unless this method is actually selected.
+def _get_session():
+    """Lazily loads this YOLO26s-pose corner detector via raw ONNX Runtime -- same
+    lazy-import pattern as the other learned methods, so importing this module doesn't
+    cost onnxruntime init time unless this method is actually selected.
 
-    Loaded from the ONNX export (see docs/progress_log.md for the .pt-vs-ONNX
-    benchmark) rather than the raw .pt checkpoint -- ONNX Runtime measured ~2.4x
-    faster per-image on this box's CPU, and CPU is the only place this needs to run:
-    same reasoning as the other learned methods, this Jetson shares physical RAM
-    between CPU and GPU, and under normal desktop load there isn't enough free to grow
-    the CUDA allocator (confirmed by a real NvMapMemAllocInternalTagged OOM on this
-    box). task='pose' is passed explicitly since ONNX models don't carry task metadata
-    the way .pt checkpoints do -- without it ultralytics guesses 'detect' and silently
-    drops the keypoint head's output."""
-    global _model
-    if _model is None:
-        from ultralytics import YOLO
+    Runs inference through onnxruntime.InferenceSession directly instead of the
+    ultralytics.YOLO wrapper used during training/comparison -- ultralytics pulls in
+    torch+torchvision as hard dependencies (~4GB) purely to do letterbox/NMS
+    bookkeeping this file reimplements itself in ~30 lines (see _preprocess/_run_model
+    below), which matters for keeping the deployed container image small. Preprocessing
+    (letterbox resize + pad) and postprocessing (box/keypoint coordinate unletterboxing)
+    here were verified to numerically match ultralytics' own output on this checkpoint
+    to 3+ decimal places before this rewrite -- box and keypoint coordinates are
+    reproduced exactly, not approximately."""
+    global _session
+    if _session is None:
+        import onnxruntime as ort
 
-        _model = YOLO(CHECKPOINT_PATH, task="pose")
-    return _model
+        _session = ort.InferenceSession(CHECKPOINT_PATH, providers=["CPUExecutionProvider"])
+    return _session
 
 
 def _order_corners(pts):
@@ -64,17 +65,56 @@ def _box_iou(a, b):
     return inter / union if union > 0 else 0.0
 
 
-def _run_model(image, detection_image, conf):
-    model = _get_model()
-    predict_image = detection_image if detection_image is not None else image
-    results = model.predict(predict_image, imgsz=PREDICT_IMGSZ, conf=conf, device="cpu", verbose=False)[0]
+def _letterbox(image, size):
+    """Resizes `image` to fit within size x size preserving aspect ratio, then pads
+    with 114-gray to a square -- matches ultralytics' own default preprocessing
+    exactly (verified numerically against ultralytics.YOLO's output on this
+    checkpoint), which is what this model was trained/exported expecting as input.
+    Returns (padded_image, scale, pad_left, pad_top) so detections can be mapped back
+    into the original image's coordinate space afterward.
+    """
+    h0, w0 = image.shape[:2]
+    scale = min(size / h0, size / w0)
+    new_w, new_h = round(w0 * scale), round(h0 * scale)
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
-    if results.keypoints is None or len(results.boxes) == 0:
+    pad_w, pad_h = size - new_w, size - new_h
+    top, bottom = pad_h // 2, pad_h - pad_h // 2
+    left, right = pad_w // 2, pad_w - pad_w // 2
+    padded = cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
+    return padded, scale, left, top
+
+
+def _run_model(image, detection_image, conf):
+    session = _get_session()
+    predict_image = detection_image if detection_image is not None else image
+
+    padded, scale, pad_left, pad_top = _letterbox(predict_image, PREDICT_IMGSZ)
+    rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    input_tensor = np.transpose(rgb, (2, 0, 1))[None]
+
+    output = session.run(None, {"images": input_tensor})[0][0]  # (300, 18): NMS already applied by the exported graph
+
+    confs = output[:, 4]
+    keep = confs >= conf
+    output = output[keep]
+    confs = confs[keep]
+    if len(output) == 0:
         return []
 
-    order = results.boxes.conf.argsort(descending=True)
-    boxes_xyxy = results.boxes.xyxy[order].cpu().numpy()
-    kpts = results.keypoints.xy[order].cpu().numpy()
+    order = np.argsort(-confs)
+    output = output[order]
+
+    boxes_letterboxed = output[:, :4]
+    kpts_letterboxed = output[:, 6:].reshape(-1, 4, 3)[:, :, :2]  # drop per-keypoint visibility, unused (see docstring below)
+
+    boxes_xyxy = boxes_letterboxed.copy()
+    boxes_xyxy[:, [0, 2]] = (boxes_letterboxed[:, [0, 2]] - pad_left) / scale
+    boxes_xyxy[:, [1, 3]] = (boxes_letterboxed[:, [1, 3]] - pad_top) / scale
+
+    kpts = kpts_letterboxed.copy()
+    kpts[:, :, 0] = (kpts_letterboxed[:, :, 0] - pad_left) / scale
+    kpts[:, :, 1] = (kpts_letterboxed[:, :, 1] - pad_top) / scale
 
     kept_boxes = []
     kept_quads = []
@@ -104,14 +144,14 @@ def find_document_contour(edge_map, image, conf=0.25, detection_image=None):
     (27/38 vs attempt 4's 28/38) but visibly tighter/cleaner quads on shared hits
     (skewed and cluttered images especially) -- see docs/progress_log.md for the full
     comparison. Chosen over attempt 4 for the quad-quality edge plus the ONNX export
-    path (see _get_model's docstring), not because it wins on recall.
+    path (see _get_session's docstring), not because it wins on recall.
 
-    Same interface and full-res-input convention as yolo_v8_pose.py /
-    yolo26_v2_pose.py: predicts at 800x800 (PREDICT_IMGSZ, matching this model's
-    training imgsz -- see model/attempt 5_yolo26s/args.yaml) on the original image,
-    scales the resulting quad back into the shared 500px detection space. No
-    per-keypoint confidence gate (same reasoning as the other direct-keypoint methods)
-    -- only overall box confidence (`conf`) filters detections.
+    Same interface and full-res-input convention as the other learned methods:
+    predicts at 800x800 (PREDICT_IMGSZ, matching this model's training imgsz -- see
+    model/attempt 5_yolo26s/args.yaml) on the original image, scales the resulting quad
+    back into the shared 500px detection space. No per-keypoint confidence gate (same
+    reasoning as the other direct-keypoint methods) -- only overall box confidence
+    (`conf`) filters detections.
 
     `edge_map` is accepted but unused, only to match the shared method signature used
     by pipeline.detect_boundary and compare.py.
@@ -128,11 +168,11 @@ def find_document_contours(image, conf=0.25, detection_image=None):
     validate against yet. What's confirmed so far, on a single available cluttered
     photo containing one real document (cluttered_06): the model returned 2 boxes over
     the *same* physical page (xyxy corners within ~50px of each other on a ~1100px-wide
-    box) that Ultralytics' own default NMS (iou=0.7) did not merge -- so this function
-    adds its own stricter IoU-based de-duplication (BATCH_DEDUP_IOU_THRESHOLD=0.3)
-    before treating multiple boxes as multiple documents. Whether the model can
-    actually *separate* two distinct side-by-side documents (rather than just
-    duplicate-detect one) is untested; treat results as a starting point for manual
-    review, not a trusted final answer, until tried on a real multi-doc batch photo.
+    box) that the exported graph's own NMS did not merge -- so this function adds its
+    own stricter IoU-based de-duplication (BATCH_DEDUP_IOU_THRESHOLD=0.3) before
+    treating multiple boxes as multiple documents. Whether the model can actually
+    *separate* two distinct side-by-side documents (rather than just duplicate-detect
+    one) is untested; treat results as a starting point for manual review, not a
+    trusted final answer, until tried on a real multi-doc batch photo.
     """
     return _run_model(image, detection_image, conf)
