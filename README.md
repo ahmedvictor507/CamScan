@@ -10,6 +10,12 @@ segmentation stretch goal (SAM), and five trained YOLO-pose corner-detection mod
 before settling on the current production model — see [Experimental history](#experimental-history)
 for the full comparison.
 
+![Detecting a skewed document, adjusting the crop, and exporting to PDF](docs/demo_skewed_to_pdf.gif)
+
+*A skewed photo (held up against a window, real perspective distortion) auto-detected
+by the production model, the crop manually fine-tuned, enhancement strength pushed up,
+and exported straight to PDF.*
+
 ## Pipeline
 
 1. Preprocess (grayscale, blur)
