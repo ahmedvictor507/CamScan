@@ -17,3 +17,4 @@ model/*/*.png
 model/*/*.jpg
 model/*/*.jpeg
 !model/attempt 5_yolo26s/results.png
+.pytest_cache/

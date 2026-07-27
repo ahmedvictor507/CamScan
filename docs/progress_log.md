@@ -587,3 +587,85 @@ duplicate preview/contact-sheet directories from earlier ad-hoc runs were remove
 **Still open:** `onnxruntime` is only installed in the local dev venv, not yet added
 to `requirements.txt` — needs fixing before a fresh deploy (e.g. Hugging Face Spaces)
 can actually load the ONNX model.
+
+## 2026-07-27 — Deployed to Railway + Vercel, dropped ultralytics from the served
+path, added a real test suite
+
+`onnxruntime`/`ultralytics` added to `requirements.txt` (fixing the open item above).
+Deployment target changed from the originally-discussed Hugging Face Spaces to
+**Railway** (backend) + **Vercel** (frontend) after checking HF's actual pricing:
+Docker Spaces require a paid PRO plan just to *create*, even though the underlying
+CPU hardware is free — not worth it for this project's current stage. Railway's free
+tier is thin ($1/mo credit after an initial trial) but its $5/mo Hobby tier is cheap
+and, unlike Fly.io (no real free tier left for new accounts in 2026) or Render (works,
+but sleeps after 15 min idle on its free tier), doesn't need a credit card to start.
+
+**Dropped `ultralytics` from the deployed image.** The ONNX-loading path
+(`yolo26_doccorner_pose.py`) used `ultralytics.YOLO(path, task="pose")` as a thin
+wrapper around ONNX Runtime — convenient, but `ultralytics` hard-depends on
+`torch`+`torchvision` (~4GB) regardless of whether PyTorch itself is ever used for
+inference, which it isn't here. Built a Docker image to check the actual cost: **5.92GB**,
+almost entirely torch/torchvision. Rewrote `_run_model` to call
+`onnxruntime.InferenceSession` directly, reimplementing what the wrapper did
+internally:
+- `_letterbox`: aspect-preserving resize + 114-gray pad to 800x800, matching
+  ultralytics' own default preprocessing. Verified by direct comparison — ran the
+  same image through both the `ultralytics`-wrapped path and the raw-ONNX path,
+  confirmed matching confidence (`0.850814` vs `0.85081`) and box/keypoint
+  coordinates to 3+ decimal places before trusting the rewrite.
+- Manual postprocessing of the exported graph's `(1, 300, 18)` output (NMS already
+  baked in by the export step): box + confidence + class + 4 keypoints per row,
+  unletterboxed back into the original image's coordinate space.
+- Full 38-image regression via `compare.py` after the rewrite reproduced the exact
+  same per-condition scores as the `ultralytics`-backed version — confirms the
+  rewrite is lossless, not just "looks right on one image."
+
+Combined with switching `opencv-python` → `opencv-python-headless` (no GUI/X11 bindings
+needed in a container) and splitting a deploy-only `requirements-deploy.txt` from the
+full dev `requirements.txt`, the image dropped to **679MB** — an 8.7x reduction from
+5.92GB.
+
+**Railway deploy troubleshooting:** the first deploy attempt sat at "Queued" indefinitely
+because Railway's dashboard had silently picked its own auto-builder (Railpack) instead
+of the repo's `Dockerfile` — fixed by explicitly setting Builder to `Dockerfile` and the
+Dockerfile path to `Dockerfile` (blank/no leading slash) in Settings → Build. A second
+issue after that: the container came up healthy (confirmed via deploy logs showing
+`Uvicorn running on http://0.0.0.0:8080` and a successful internal healthcheck `200 OK`)
+but was unreachable from outside — Settings → Networking → Edit Port was unset, so
+Railway's edge proxy had nothing to route the public domain to; setting it to 8080 (the
+port `$PORT` actually resolves to in this environment) fixed external routing. Also set
+Healthcheck Path to `/api/health` so Railway can verify liveness using the endpoint this
+project already exposes for that purpose, rather than leaving it unset.
+
+**Repo cleanup, round 2:** deleted `example/CamScanner-UT.ipynb` — a pre-project
+scaffolding notebook (fill-in-the-hints tutorial format, referencing a nonexistent
+`images/example.jpg`) left over from before `camscan/` existed, unreferenced by
+anything.
+
+**Added `tests/` (pytest, 15 tests):** targeted at the logic most likely to silently
+regress rather than broad coverage --
+- `test_pipeline_fallback.py`: the score-and-pick fallback behavior, including a
+  regression test that reproduces the exact bug the score-and-pick rework fixed
+  (asserts the higher-scoring quad wins even when a worse one runs first in
+  `FALLBACK_CHAIN`) via monkeypatching `pipeline.METHODS` and `pipeline.score_quad`
+  directly rather than depending on real image content.
+- `test_yolo26_doccorner_pose.py`: `_order_corners` (including a rotated,
+  non-axis-aligned quad, not just the trivial already-ordered case), `_box_iou`
+  (identical/disjoint/half-overlap/degenerate-zero-area boxes), and `_letterbox`
+  (square/wide/tall images, asserting scale and padding placement match the
+  aspect-preserving contract) -- all pure-math, no model file or ONNX Runtime needed.
+- `test_pipeline_smoke.py`: one real end-to-end `scan()` call, catching
+  "the whole pipeline is broken" regressions cheaply without re-deriving
+  `compare.py`'s detection-accuracy scoring.
+
+Classical CV methods' exact pixel outputs were deliberately left untested at the unit
+level — `compare.py`'s scored regression suite already covers those, and they're
+inherently visual/fuzzy in a way unit tests don't suit well.
+
+**Environment quirk found while adding tests, not a project bug:** this machine has a
+system-wide ROS2 (Humble) install that registers broken `pytest11` entry-point plugins
+(`launch_testing`, missing its own `lark` dependency) globally, which crashes pytest's
+own startup inside this project's venv regardless of which packages the venv itself
+has installed. Worked around with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`; documented in the
+README's Run the tests section rather than worked around in-repo, since it's specific
+to this machine's global Python state, not something the project itself can fix.

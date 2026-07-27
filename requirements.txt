@@ -15,3 +15,5 @@ onnxruntime>=1.23
 # directly and does not import ultralytics -- see requirements-deploy.txt for the
 # trimmed set actually used in the Docker image.
 ultralytics>=8.3
+
+pytest>=8.0
