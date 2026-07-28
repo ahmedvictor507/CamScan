@@ -686,3 +686,61 @@ regress rather than broad coverage --
 Classical CV methods' exact pixel outputs were deliberately left untested at the unit
 level — `compare.py`'s scored regression suite already covers those, and they're
 inherently visual/fuzzy in a way unit tests don't suit well.
+
+## 2026-07-29 — Day 3: two dark-data finetuning experiments on attempt 5, and the demo video recorded
+
+**Two further finetuning runs, both starting from attempt 5's weights** rather than
+training from scratch:
+
+- `model/yolo26_mixed_1k_run`: continued training on 1K additional images, mixed
+  conditions (`DocCorner_Mixed_1K`), 25 epochs.
+- `model/yolo26_polygon_dark_finetuned`: continued training on 1K images specifically
+  filtered for dark/low-light conditions (`DocCorner_DarkFilter_1K`), 20 epochs, with
+  milder color-jitter/rotation augmentation to match the darker, more uniform source
+  images.
+
+Both converge fast — pose mAP50-95 on their own validation splits reaches ~0.99 within
+a handful of epochs, confirming the attempt-5 backbone finetunes quickly and
+effectively when given data targeted at a specific weakness.
+
+**Finding: dark-filtered finetuning data measurably helps low-light detection.** Spot
+checks (`data/results/Dark_finetuned.png`, `data/results/Mixed_1k.png` — 9-image
+contact sheets across clean/low_light/skewed) show both finetuned checkpoints picking
+up a confident detection on `low_light_01`/`low_light_02` where the production
+attempt-5 model is comparatively weaker — `low_light` has been the hardest bucket for
+every method in this project (see Known limitations in the README).
+
+**Why neither replaces attempt 5 in production yet:** the same contact sheets show a
+real regression — both finetuned models tend to fragment a single book/document into
+two or more overlapping detections (e.g. `clean_02`, `clean_05`, `clean_06`: one box
+over the spine/author-text region, one over the title graphic) instead of the single
+clean quad attempt 5 produces on the same images. Since
+`yolo26_doccorner_pose.py`/the pipeline expects one best quad per document, this
+fragmentation is a worse failure mode than the classical fallback chain would produce
+on the same image, not a strictly-better model. Neither finetuned checkpoint has been
+run through the full audited 38-image `compare.py` process attempt 5 went through, so
+there's no apples-to-apples score yet — only the qualitative spot-check above.
+`DEFAULT_METHOD` stays `yolo26_doccorner_pose` (attempt 5).
+
+**Read as a whole, this is a promising direction rather than a dead end:** the fast
+convergence suggests the fragmentation is more likely a data/labeling artifact of the
+two new finetuning sets (`Dark_Books_Dataset_YOLO`/`DocCorner_Mixed_1K`, both built by
+a custom per-sample filter/shuffle over `mapo80/DocCornerDataset` — see the notebook
+note below) than a ceiling on the model family. Documented in the README's
+[Experimental history](../README.md#experimental-history) as the concrete next step: a
+properly labeled, single-quad-per-document dark/low-light dataset in attempt 5's own
+labeling convention, finetuned on top of attempt 5 specifically.
+
+**Also found while writing this up: `Paper_Corner_Detection.ipynb` (added to the repo
+today) already contains attempt 5's own training cell**, not just the two new
+finetuning runs. It's not labeled "attempt 5" in the notebook — under the "Hugging
+Face Dataset" section it's named `yolo26s_doc_corner_10k` (`yolo26s-pose`, `imgsz=800`,
+`epochs=80`, 10k/1k/1k train/val/test split from `mapo80/DocCornerDataset`), matching
+attempt 5's known recipe exactly. Corrected the README, which had initially and
+incorrectly stated attempt 4/5 weren't in the notebook at all. What's genuinely
+missing from the notebook is attempt 4 specifically (the yolo26n-pose/640px/3k-image
+run that was production before attempt 5) — that one really was a separate run, not
+recorded here, only in this log.
+
+**Demo video recorded today** — the walkthrough gif/video referenced at the top of the
+README (`docs/demo_skewed_to_pdf.gif`).

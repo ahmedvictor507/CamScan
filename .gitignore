@@ -10,11 +10,14 @@ models/
 .DS_Store
 .claude/
 
-# Only keep the ONNX export + training report (results.csv/results.png) from the
-# current production model (attempt 5); everything else under model/ is regenerable
-# training scratch (label/batch visualizations, PR curves, confusion matrices).
+# Only keep the ONNX export + training report (results.csv/results.png) from each
+# trained run (attempt 5 plus the two dark-data finetuning runs); everything else
+# under model/ is regenerable training scratch (label/batch visualizations, PR
+# curves, confusion matrices).
 model/*/*.png
 model/*/*.jpg
 model/*/*.jpeg
 !model/attempt 5_yolo26s/results.png
+!model/yolo26_mixed_1k_run/results.png
+!model/yolo26_polygon_dark_finetuned/results.png
 .pytest_cache/
