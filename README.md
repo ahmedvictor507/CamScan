@@ -17,6 +17,8 @@ for the full comparison.
 by the production model, the crop manually fine-tuned, enhancement strength pushed up,
 and exported straight to PDF.*
 
+**Full demo video:** [youtu.be/xu7ZK6jGJMM](https://youtu.be/xu7ZK6jGJMM)
+
 ## Pipeline
 
 1. Preprocess (grayscale, blur)
